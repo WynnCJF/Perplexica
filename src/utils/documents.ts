@@ -10,8 +10,16 @@ export const getDocumentsFromLinks = async ({ links }: { links: string[] }) => {
 
   let docs: Document[] = [];
 
+  // Filter for only Reddit URLs
+  const redditLinks = links.filter(link => {
+    const url = link.startsWith('http://') || link.startsWith('https://') 
+      ? link 
+      : `https://${link}`;
+    return url.includes('reddit.com');
+  });
+
   await Promise.all(
-    links.map(async (link) => {
+    redditLinks.map(async (link) => {
       link =
         link.startsWith('http://') || link.startsWith('https://')
           ? link

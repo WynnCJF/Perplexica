@@ -208,7 +208,12 @@ class MetaSearchAgent implements MetaSearchAgentType {
             engines: this.config.activeEngines,
           });
 
-          const documents = res.results.map(
+          // Filter to include only Reddit URLs
+          const redditResults = res.results.filter(result => 
+            result.url.includes('reddit.com')
+          );
+
+          const documents = redditResults.map(
             (result) =>
               new Document({
                 pageContent:
