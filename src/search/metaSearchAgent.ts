@@ -330,7 +330,7 @@ class MetaSearchAgent implements MetaSearchAgentType {
       .flat();
 
     if (query.toLocaleLowerCase() === 'summarize') {
-      return docs.slice(0, 15);
+      return docs.slice(0, 30);
     }
 
     const docsWithContent = docs.filter(
@@ -367,18 +367,18 @@ class MetaSearchAgent implements MetaSearchAgentType {
             (sim) => sim.similarity > (this.config.rerankThreshold ?? 0.3),
           )
           .sort((a, b) => b.similarity - a.similarity)
-          .slice(0, 15)
+          .slice(0, 30)
           .map((sim) => fileDocs[sim.index]);
 
         sortedDocs =
-          docsWithContent.length > 0 ? sortedDocs.slice(0, 8) : sortedDocs;
+          docsWithContent.length > 0 ? sortedDocs.slice(0, 30) : sortedDocs;
 
         return [
           ...sortedDocs,
-          ...docsWithContent.slice(0, 15 - sortedDocs.length),
+          ...docsWithContent.slice(0, 30 - sortedDocs.length),
         ];
       } else {
-        return docsWithContent.slice(0, 15);
+        return docsWithContent.slice(0, 30);
       }
     } else if (optimizationMode === 'balanced') {
       const [docEmbeddings, queryEmbedding] = await Promise.all([
@@ -414,7 +414,7 @@ class MetaSearchAgent implements MetaSearchAgentType {
       const sortedDocs = similarity
         .filter((sim) => sim.similarity > (this.config.rerankThreshold ?? 0.3))
         .sort((a, b) => b.similarity - a.similarity)
-        .slice(0, 15)
+        .slice(0, 20)
         .map((sim) => docsWithContent[sim.index]);
 
       return sortedDocs;
@@ -422,12 +422,28 @@ class MetaSearchAgent implements MetaSearchAgentType {
   }
 
   private processDocs(docs: Document[]) {
-    return docs
+    // Add a header to emphasize the importance of using multiple sources
+    const header = `
+IMPORTANT: This search query has returned ${docs.length} sources. You should use information from most of these sources in your response, as long as they contain relevant information.
+The sources are listed below, numbered from 1 to ${docs.length}. Use these numbers when citing information in your response.
+`;
+
+    // Process each document with more context
+    const processedDocs = docs
       .map(
-        (_, index) =>
-          `${index + 1}. ${docs[index].metadata.title} ${docs[index].pageContent}`,
+        (doc, index) => {
+          const source = `${index + 1}. ${doc.metadata.title || 'Untitled'} (Source: ${doc.metadata.url || 'Unknown'})`;
+          
+          // Add special marker for Reddit sources to emphasize them
+          const isRedditSource = doc.metadata.url && doc.metadata.url.includes('reddit.com');
+          const sourceType = isRedditSource ? ' [REDDIT DISCUSSION]' : '';
+          
+          return `${source}${sourceType}\n${doc.pageContent}\n`;
+        }
       )
-      .join('\n');
+      .join('\n---\n\n');
+
+    return header + processedDocs;
   }
 
   private async handleStream(
