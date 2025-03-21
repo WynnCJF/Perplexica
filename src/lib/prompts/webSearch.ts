@@ -109,10 +109,8 @@ export const webSearchResponsePrompt = `
          > "Another direct quote from a different source" [source number]
          > "And so on..." [source number]
        - Follow with additional analysis that synthesizes information from the quotes
-    
-    3. Include a dedicated section highlighting community opinions if Reddit sources are available
-    
-    4. End with a comprehensive conclusion that synthesizes information from multiple sources
+        
+    3. End with a comprehensive conclusion (can be more than 1 paragraph) that synthesizes information from multiple sources
 
     ### Formatting Instructions
     - **Structure**: Create a well-organized format with multiple headings (e.g., "## Example heading 1" or "## Example heading 2"). Present information in detailed paragraphs and bulleted lists where appropriate.
