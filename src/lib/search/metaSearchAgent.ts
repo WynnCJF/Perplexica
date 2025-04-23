@@ -24,6 +24,72 @@ import computeSimilarity from '../utils/computeSimilarity';
 import formatChatHistoryAsString from '../utils/formatHistory';
 import eventEmitter from 'events';
 import { StreamEvent } from '@langchain/core/tracers/log_stream';
+import axios from 'axios';
+
+// Function to log Reddit ranking data to a file
+const logRedditRanking = (data: any, prefix = 'reddit_ranking') => {
+  try {
+    const logDir = path.join(process.cwd(), 'logs');
+    
+    // Create logs directory if it doesn't exist
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    
+    // Format timestamp for the filename
+    const timestamp = new Date().toISOString().replace(/:/g, '-');
+    const logFile = path.join(logDir, `${prefix}_${timestamp}.json`);
+    
+    // Write log to file
+    fs.writeFileSync(logFile, JSON.stringify(data, null, 2));
+    console.log(`[INFO] Reddit ranking data logged to: ${logFile}`);
+    
+    return logFile;
+  } catch (error) {
+    console.error('[ERROR] Failed to log Reddit ranking data:', error);
+    return null;
+  }
+};
+
+// Function to save HTML content to debug folder
+const saveHtmlToDebug = (html: string, url: string, prefix = 'reddit_html') => {
+  try {
+    // Check if DEBUG_SAVE_HTML environment variable is set
+    if (process.env.DEBUG_SAVE_HTML !== 'true') {
+      return null; // Skip saving if not in debug mode
+    }
+    
+    const debugDir = path.join(process.cwd(), 'debug');
+    
+    // Create debug directory if it doesn't exist
+    if (!fs.existsSync(debugDir)) {
+      fs.mkdirSync(debugDir, { recursive: true });
+    }
+    
+    // Create a safe filename from the URL
+    const urlObj = new URL(url);
+    const safeFilename = urlObj.pathname
+      .replace(/[^a-z0-9]/gi, '_')
+      .substring(0, 50); // Limit filename length
+    
+    // Format timestamp for the filename
+    const timestamp = Date.now();
+    const filename = `${prefix}_${safeFilename}_${timestamp}.html`;
+    const filePath = path.join(debugDir, filename);
+    
+    // Write HTML to file
+    fs.writeFileSync(filePath, html);
+    console.log(`[INFO] Saved HTML content to: ${filePath}`);
+    
+    return filePath;
+  } catch (error) {
+    console.error('[ERROR] Failed to save HTML to debug folder:', error);
+    return null;
+  }
+};
+
+// Helper function to add delay between requests
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export interface MetaSearchAgentType {
   searchAndAnswer: (
@@ -51,6 +117,45 @@ type BasicChainInput = {
   query: string;
 };
 
+// Add a utility function to log the entire prompt to a file
+const logCompletePrompt = (prompt: any, query: string) => {
+  try {
+    const logDir = path.join(process.cwd(), 'logs');
+    
+    // Create logs directory if it doesn't exist
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    
+    // Format timestamp for the filename
+    const timestamp = new Date().toISOString().replace(/:/g, '-');
+    const sanitizedQuery = query.replace(/[^\w\s]/g, '_').substring(0, 30);
+    const logFile = path.join(logDir, `prompt_${sanitizedQuery}_${timestamp}.log`);
+    
+    // For messages format, convert to readable format
+    let logContent = '';
+    
+    if (Array.isArray(prompt)) {
+      // Handle array of messages format
+      logContent = prompt.map((msg, i) => {
+        return `\n=== MESSAGE ${i+1} (${msg._getType()}) ===\n${msg.content}\n`;
+      }).join('\n');
+    } else if (typeof prompt === 'string') {
+      // Handle string format
+      logContent = prompt;
+    } else {
+      // Handle other formats by stringifying
+      logContent = JSON.stringify(prompt, null, 2);
+    }
+    
+    // Write log to file
+    fs.writeFileSync(logFile, `COMPLETE LLM PROMPT FOR QUERY: "${query}"\n\n${logContent}`);
+    console.log(`[DEBUG] Complete prompt logged to: ${logFile}`);
+  } catch (error) {
+    console.error('[DEBUG] Error logging complete prompt:', error);
+  }
+};
+
 class MetaSearchAgent implements MetaSearchAgentType {
   private config: Config;
   private strParser = new StringOutputParser();
@@ -67,11 +172,11 @@ class MetaSearchAgent implements MetaSearchAgentType {
       llm,
       this.strParser,
       RunnableLambda.from(async (input: string) => {
-        const linksOutputParser = new LineListOutputParser({
+        const linksOutputParser = new LineListOutputParser({  // parse link the input
           key: 'links',
         });
 
-        const questionOutputParser = new LineOutputParser({
+        const questionOutputParser = new LineOutputParser({  // parse question from the input
           key: 'question',
         });
 
@@ -204,6 +309,7 @@ class MetaSearchAgent implements MetaSearchAgentType {
         } else {
           question = question.replace(/<think>.*?<\/think>/g, '');
 
+          console.log('Question:', question);
           const res = await searchSearxng(question, {
             language: 'en',
             engines: this.config.activeEngines,
@@ -213,22 +319,310 @@ class MetaSearchAgent implements MetaSearchAgentType {
           const redditResults = res.results.filter(result => 
             result.url.includes('reddit.com')
           );
+          
+          // Log the filtered Reddit results to a file instead of console
+          const redditResultsLogFile = logRedditRanking(redditResults, 'reddit_results');
+          console.log(`[INFO] Reddit search results saved to: ${redditResultsLogFile}`);
 
-          const documents = redditResults.map(
-            (result) =>
-              new Document({
-                pageContent:
-                  result.content ||
-                  (this.config.activeEngines.includes('youtube')
-                    ? result.title
-                    : '') /* Todo: Implement transcript grabbing using Youtubei (source: https://www.npmjs.com/package/youtubei) */,
-                metadata: {
-                  title: result.title,
-                  url: result.url,
-                  ...(result.img_src && { img_src: result.img_src }),
-                },
-              }),
-          );
+          // Take up to 20 Reddit URLs for initial analysis (increased from 10)
+          const initialRedditUrls = redditResults.slice(0, 20).map(result => result.url);
+          let documents: Document[] = [];
+          
+          // Start collecting ranking data for logging
+          const rankingLog = {
+            query: question,
+            timestamp: new Date().toISOString(),
+            initialUrlsCount: initialRedditUrls.length,
+            initialUrls: initialRedditUrls,
+            analysisResults: [] as any[],
+            selectedUrls: [] as string[],
+            documents: [] as any[]
+          };
+          
+          if (initialRedditUrls.length > 0) {
+            console.log(`[INFO] Analyzing ${initialRedditUrls.length} Reddit URLs for ranking`);
+            
+            // Define a function to extract just the top comment score from a Reddit URL
+            const extractTopCommentScore = async (url: string): Promise<{url: string, score: number, details: string, metrics: any}> => {
+              try {
+                // Normalize URL for Reddit
+                let normalizedUrl = url;
+                if (normalizedUrl.includes('www.reddit.com')) {
+                  normalizedUrl = normalizedUrl.replace('www.reddit.com', 'old.reddit.com');
+                }
+                
+                // Fetch the HTML content with retry logic and rate limiting
+                console.log(`[INFO] Fetching data from ${url}`);
+                let response;
+                let retries = 0;
+                const maxRetries = 3;
+                
+                while (retries < maxRetries) {
+                  try {
+                    // Add delay between requests to avoid rate limiting
+                    if (retries > 0) {
+                      const delayTime = 2000 * retries; // Exponential backoff
+                      console.log(`[INFO] Retry ${retries}/${maxRetries}, waiting ${delayTime}ms before retry...`);
+                      await delay(delayTime);
+                    }
+                    
+                    response = await axios.get(normalizedUrl, {
+                      responseType: 'text',
+                      headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+                      },
+                      timeout: 5000, // Shorter timeout for initial analysis
+                    });
+                    
+                    // If successful, break the retry loop
+                    break;
+                  } catch (error: any) {
+                    retries++;
+                    const status = error.response?.status;
+                    
+                    if (status === 429) {
+                      // Rate limiting error - we need to wait longer
+                      console.log(`[WARN] Rate limited (429) when fetching ${url}. Retry ${retries}/${maxRetries}`);
+                      if (retries >= maxRetries) {
+                        throw new Error(`Rate limited by Reddit after ${maxRetries} retries`);
+                      }
+                    } else {
+                      // Other error - might be worth retrying
+                      console.error(`[ERROR] Failed to fetch ${url}: ${error.message}`);
+                      if (retries >= maxRetries) {
+                        throw error;
+                      }
+                    }
+                  }
+                }
+                
+                // If we've reached here without a response, there was an issue
+                if (!response) {
+                  throw new Error(`Failed to get response for ${url} after ${maxRetries} attempts`);
+                }
+                
+                const html = response.data;
+                
+                // Save the complete HTML to debug folder (only if DEBUG_SAVE_HTML=true)
+                const htmlPath = saveHtmlToDebug(html, url);
+                if (htmlPath) {
+                  console.log(`[INFO] Saved complete HTML for ${url} to ${htmlPath}`);
+                }
+                
+                // Extract comment score using regex
+                // Pattern to find comment blocks in the HTML
+                const commentRegex = /<div class=" thing id-t1_[^"]*[\s\S]*?<\/div>\s*<div class="child">/g;
+                
+                // Pattern to extract score from each comment block
+                const scoreRegex = /<span class="score[^>]*>([\d]+) points?<\/span>/;
+                
+                let highestScore = 0;
+                let commentMatch;
+                let matchCount = 0;
+                let commentScores: number[] = [];
+                
+                // Find all comments and extract their scores
+                while ((commentMatch = commentRegex.exec(html)) !== null) {
+                  matchCount++;
+                  const commentHtml = commentMatch[0];
+                  const scoreMatch = commentHtml.match(scoreRegex);
+                  
+                  if (scoreMatch && scoreMatch[1]) {
+                    const score = parseInt(scoreMatch[1], 10);
+                    commentScores.push(score);
+                    if (score > highestScore) {
+                      highestScore = score;
+                    }
+                  }
+                }
+                
+                // Also try to extract the post score
+                const postScoreMatch = html.match(/<div class="score[^"]*"[^>]*>([\d,]+)<\/div>/);
+                let postScore = 0;
+                
+                if (postScoreMatch && postScoreMatch[1]) {
+                  postScore = parseInt(postScoreMatch[1].replace(/,/g, ''), 10);
+                } else {
+                  // Try alternative pattern for post score
+                  const altScoreMatch = html.match(/<div class="score unvoted"[^>]*>([\d,]+)<\/div>/);
+                  if (altScoreMatch && altScoreMatch[1]) {
+                    postScore = parseInt(altScoreMatch[1].replace(/,/g, ''), 10);
+                  }
+                }
+                
+                // Use a combined scoring approach (post score + top comment score)
+                const combinedScore = highestScore + (postScore > 0 ? Math.log10(postScore) * 3 : 0);
+                
+                // Extract post title for better logging
+                const titleMatch = html.match(/<title>(.*?)<\/title>/);
+                const title = titleMatch ? titleMatch[1].replace(/ : .*$/, '') : 'Unknown';
+                
+                // Create detailed diagnostics string
+                const details = `Title: "${title.substring(0, 50)}...", PostScore: ${postScore}, TopCommentScore: ${highestScore}, Comments: ${matchCount}`;
+                
+                // Create metrics object for structured logging
+                const metrics = {
+                  url,
+                  normalizedUrl,
+                  title,
+                  postScore,
+                  highestCommentScore: highestScore,
+                  commentCount: matchCount,
+                  commentScores: commentScores.sort((a, b) => b - a).slice(0, 10), // Save top 10 comment scores
+                  combinedScore,
+                  htmlLength: html.length
+                };
+                
+                console.log(`[INFO] Analyzed ${url}: Score ${combinedScore.toFixed(2)}`);
+                
+                return {
+                  url,
+                  score: combinedScore,
+                  details,
+                  metrics
+                };
+              } catch (error) {
+                console.error(`[ERROR] Failed to analyze ${url}:`, error);
+                return {
+                  url,
+                  score: 0,
+                  details: `Error: ${error instanceof Error ? error.message : String(error)}`,
+                  metrics: { url, error: error instanceof Error ? error.message : String(error) }
+                };
+              }
+            };
+            
+            // Analyze all URLs in parallel with rate limiting
+            console.log(`[INFO] Starting analysis of URLs with rate limiting...`);
+            
+            // Process URLs in batches to prevent rate limiting
+            const BATCH_SIZE = 3; // Process 3 URLs at a time
+            const BATCH_DELAY = 3000; // Wait 3 seconds between batches
+            
+            let allScoreResults: Array<{url: string, score: number, details: string, metrics: any}> = [];
+            
+            // Process URLs in batches
+            for (let i = 0; i < initialRedditUrls.length; i += BATCH_SIZE) {
+              const batchUrls = initialRedditUrls.slice(i, i + BATCH_SIZE);
+              console.log(`[INFO] Processing batch ${i/BATCH_SIZE + 1}/${Math.ceil(initialRedditUrls.length/BATCH_SIZE)}: ${batchUrls.length} URLs`);
+              
+              // Process batch in parallel
+              const batchResults = await Promise.all(
+                batchUrls.map(url => extractTopCommentScore(url)
+                  .catch(error => {
+                    console.error(`[ERROR] Failed to analyze ${url}: ${error}`);
+                    // Return a dummy result with zero score on error
+                    return {
+                      url,
+                      score: 0,
+                      details: `Error: ${error instanceof Error ? error.message : String(error)}`,
+                      metrics: { url, error: error instanceof Error ? error.message : String(error) }
+                    };
+                  })
+                )
+              );
+              
+              // Add batch results to overall results
+              allScoreResults = [...allScoreResults, ...batchResults];
+              
+              // Wait before processing next batch (except for the last batch)
+              if (i + BATCH_SIZE < initialRedditUrls.length) {
+                console.log(`[INFO] Waiting ${BATCH_DELAY}ms before processing next batch...`);
+                await delay(BATCH_DELAY);
+              }
+            }
+            
+            // Add results to ranking log
+            rankingLog.analysisResults = allScoreResults.map(r => r.metrics);
+            
+            // Sort by score (highest first)
+            const sortedResults = allScoreResults.sort((a, b) => b.score - a.score);
+            
+            // Take top 10 (increased from 5)
+            const topRedditUrls = sortedResults
+              .slice(0, 10)
+              .map(result => result.url);
+            
+            // Add selected URLs to ranking log
+            rankingLog.selectedUrls = topRedditUrls;
+            
+            console.log(`[INFO] Selected top ${topRedditUrls.length} Reddit URLs by comment scores`);
+            
+            // Now fetch full content from the top URLs
+            if (topRedditUrls.length > 0) {
+              console.log(`[INFO] Fetching full content from top ${topRedditUrls.length} URLs...`);
+              // Use the existing function to fetch full content from filtered Reddit URLs
+              documents = await getDocumentsFromLinks({ links: topRedditUrls });
+              
+              // Add document summaries to ranking log
+              rankingLog.documents = documents.map(doc => ({
+                title: doc.metadata.title,
+                url: doc.metadata.url,
+                contentLength: doc.pageContent.length,
+                commentCount: doc.metadata.commentCount || 0,
+                isReddit: doc.metadata.isReddit || false
+              }));
+              
+              console.log(`[INFO] Fetched ${documents.length} documents from top Reddit URLs`);
+              
+              // Save the complete ranking log to a file
+              logRedditRanking(rankingLog, 'reddit_ranking_complete');
+              
+              // If no documents were fetched successfully, fall back to search snippets
+              if (documents.length === 0) {
+                console.log('[INFO] No documents fetched from Reddit URLs, falling back to snippets');
+                documents = redditResults.map(
+                  (result) =>
+                    new Document({
+                      pageContent:
+                        result.content ||
+                        (this.config.activeEngines.includes('youtube')
+                          ? result.title
+                          : ''),
+                      metadata: {
+                        title: result.title,
+                        url: result.url,
+                        ...(result.img_src && { img_src: result.img_src }),
+                      },
+                    }),
+                );
+              }
+            } else {
+              // No Reddit results, use original search results
+              documents = res.results.map(
+                (result) =>
+                  new Document({
+                    pageContent:
+                      result.content ||
+                      (this.config.activeEngines.includes('youtube')
+                        ? result.title
+                        : ''),
+                    metadata: {
+                      title: result.title,
+                      url: result.url,
+                      ...(result.img_src && { img_src: result.img_src }),
+                    },
+                  }),
+              );
+            }
+          } else {
+            // No Reddit results, use original search results
+            documents = res.results.map(
+              (result) =>
+                new Document({
+                  pageContent:
+                    result.content ||
+                    (this.config.activeEngines.includes('youtube')
+                      ? result.title
+                      : ''),
+                  metadata: {
+                    title: result.title,
+                    url: result.url,
+                    ...(result.img_src && { img_src: result.img_src }),
+                  },
+                }),
+            );
+          }
 
           return { query: question, docs: documents };
         }
@@ -283,6 +677,25 @@ class MetaSearchAgent implements MetaSearchAgentType {
           })
           .pipe(this.processDocs),
       }),
+      RunnableLambda.from(async (input) => {
+        const promptTemplate = ChatPromptTemplate.fromMessages([
+          ['system', this.config.responsePrompt],
+          new MessagesPlaceholder('chat_history'),
+          ['user', '{query}'],
+        ]);
+        
+        const formattedPrompt = await promptTemplate.formatMessages({
+          context: input.context,
+          date: input.date,
+          chat_history: input.chat_history,
+          query: input.query
+        });
+        
+        // Log the complete formatted prompt to a file
+        logCompletePrompt(formattedPrompt, input.query);
+
+        return input;
+      }),
       ChatPromptTemplate.fromMessages([
         ['system', this.config.responsePrompt],
         new MessagesPlaceholder('chat_history'),
@@ -331,7 +744,7 @@ class MetaSearchAgent implements MetaSearchAgentType {
       .flat();
 
     if (query.toLocaleLowerCase() === 'summarize') {
-      return docs.slice(0, 30);
+      return docs.slice(0, 30);  // this may need to be changed
     }
 
     const docsWithContent = docs.filter(
@@ -376,10 +789,10 @@ class MetaSearchAgent implements MetaSearchAgentType {
 
         return [
           ...sortedDocs,
-          ...docsWithContent.slice(0, 30 - sortedDocs.length),
+          ...docsWithContent.slice(0, 30 - sortedDocs.length),  // when there are files, only the files are ranked, and web documents are directly added to the end
         ];
       } else {
-        return docsWithContent.slice(0, 30);
+        return docsWithContent.slice(0, 30);  // no re-ranking at all if there are no files uploaded
       }
     } else if (optimizationMode === 'balanced') {
       const [docEmbeddings, queryEmbedding] = await Promise.all([
@@ -425,23 +838,84 @@ class MetaSearchAgent implements MetaSearchAgentType {
   }
 
   private processDocs(docs: Document[]) {
+    // Limit the number of documents to avoid context length issues
+    const MAX_DOCUMENTS = 8;
+    if (docs.length > MAX_DOCUMENTS) {
+      console.log(`[DEBUG] Limiting number of documents from ${docs.length} to ${MAX_DOCUMENTS} to avoid token limit issues`);
+      docs = docs.slice(0, MAX_DOCUMENTS);
+    }
+    
     // Add a header to emphasize the importance of using multiple sources
     const header = `
 IMPORTANT: This search query has returned ${docs.length} sources. You should use information from most of these sources in your response, as long as they contain relevant information.
 The sources are listed below, numbered from 1 to ${docs.length}. Use these numbers when citing information in your response.
 `;
 
-    // Process each document with more context
+    // Process each document with more context and limit content length for each source
     const processedDocs = docs
       .map(
         (doc, index) => {
           const source = `${index + 1}. ${doc.metadata.title || 'Untitled'} (Source: ${doc.metadata.url || 'Unknown'})`;
           
           // Add special marker for Reddit sources to emphasize them
-          const isRedditSource = doc.metadata.url && doc.metadata.url.includes('reddit.com');
+          const isRedditSource = doc.metadata.isReddit || (doc.metadata.url && doc.metadata.url.includes('reddit.com'));
           const sourceType = isRedditSource ? ' [REDDIT DISCUSSION]' : '';
           
-          return `${source}${sourceType}\n${doc.pageContent}\n`;
+          // For structured Reddit content (with comments), we can keep more content
+          // Reddit content is already pre-formatted in a structured way
+          const maxLength = isRedditSource ? 6000 : 2000;
+          let content = doc.pageContent;
+          
+          if (content.length > maxLength) {
+            // For Reddit content, try to preserve structure by keeping headers intact
+            if (isRedditSource) {
+              // Find the positions of main sections
+              const postHeaderPos = content.indexOf('## Original Post');
+              const commentsHeaderPos = content.indexOf('## Comments');
+              
+              if (postHeaderPos !== -1 && commentsHeaderPos !== -1) {
+                // Keep the post content and some comments, prioritizing the post
+                const postSection = content.substring(postHeaderPos, commentsHeaderPos);
+                
+                // Calculate how much space we have left for comments
+                const remainingSpace = maxLength - postSection.length;
+                let commentsSection = '';
+                
+                if (remainingSpace > 500) {
+                  // Get the comments section and truncate it
+                  commentsSection = content.substring(commentsHeaderPos);
+                  if (commentsSection.length > remainingSpace) {
+                    // Find the last complete comment before the cutoff
+                    const cutoffPoint = commentsSection.lastIndexOf('\n\n', remainingSpace);
+                    commentsSection = cutoffPoint !== -1 
+                      ? commentsSection.substring(0, cutoffPoint) 
+                      : commentsSection.substring(0, remainingSpace);
+                    commentsSection += '\n\n[...additional comments truncated...]';
+                  }
+                } else {
+                  commentsSection = '\n\n## Comments\n\n[Comments truncated to fit length limit]';
+                }
+                
+                // Combine the title, post content, and truncated comments
+                const titleSection = content.substring(0, postHeaderPos);
+                content = titleSection + postSection + commentsSection;
+              } else {
+                // If we can't identify sections, use the standard approach
+                const beginningPortion = content.substring(0, maxLength * 0.75);
+                const endingPortion = content.substring(content.length - (maxLength * 0.25));
+                content = beginningPortion + "\n\n[...content truncated...]\n\n" + endingPortion;
+              }
+            } else {
+              // Standard approach for non-Reddit content
+              const beginningPortion = content.substring(0, maxLength * 0.75);
+              const endingPortion = content.substring(content.length - (maxLength * 0.25));
+              content = beginningPortion + "\n\n[...content truncated...]\n\n" + endingPortion;
+            }
+            
+            console.log(`[DEBUG] Truncated document ${index + 1} from ${doc.pageContent.length} to ${content.length} characters`);
+          }
+          
+          return `${source}${sourceType}\n${content}\n`;
         }
       )
       .join('\n---\n\n');
