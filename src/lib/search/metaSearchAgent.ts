@@ -17,7 +17,7 @@ import LineListOutputParser from '../outputParsers/listLineOutputParser';
 import LineOutputParser from '../outputParsers/lineOutputParser';
 import { getDocumentsFromLinks } from '../utils/documents';
 import { Document } from 'langchain/document';
-import { searchSearxng } from '../searxng';
+import { searchGoogle } from '../googleSearch';
 import path from 'node:path';
 import fs from 'node:fs';
 import computeSimilarity from '../utils/computeSimilarity';
@@ -310,10 +310,13 @@ class MetaSearchAgent implements MetaSearchAgentType {
           question = question.replace(/<think>.*?<\/think>/g, '');
 
           console.log('Question:', question);
-          const res = await searchSearxng(question, {
+          const res = await searchGoogle(question, {
             language: 'en',
             engines: this.config.activeEngines,
+            numResults: 20,
           });
+
+          console.log('Search results:', res);
 
           // Filter to include only Reddit URLs
           const redditResults = res.results.filter(result => 

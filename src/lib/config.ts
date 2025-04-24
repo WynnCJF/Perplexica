@@ -33,6 +33,10 @@ interface Config {
   };
   API_ENDPOINTS: {
     SEARXNG: string;
+    GOOGLE_PSE: {
+      API_KEY: string;
+      ENGINE_ID: string;
+    };
   };
 }
 
@@ -71,6 +75,12 @@ export const getCustomOpenaiApiUrl = () =>
 
 export const getCustomOpenaiModelName = () =>
   loadConfig().MODELS.CUSTOM_OPENAI.MODEL_NAME;
+
+export const getGooglePseApiKey = () => 
+  process.env.GOOGLE_PSE_API_KEY || loadConfig().API_ENDPOINTS.GOOGLE_PSE.API_KEY;
+
+export const getGooglePseEngineId = () =>
+  process.env.GOOGLE_PSE_ID || loadConfig().API_ENDPOINTS.GOOGLE_PSE.ENGINE_ID;
 
 const mergeConfigs = (current: any, update: any): any => {
   if (update === null || update === undefined) {
