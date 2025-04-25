@@ -44,42 +44,7 @@ export async function GET(request: NextRequest) {
     
     console.log(`[INFO] Reddit proxy handling request for: ${url}`);
     
-    // First attempt: Try using 12ft.io proxy service
-    const ftUrl = `https://12ft.io/proxy?q=${encodeURIComponent(url)}`;
-    console.log(`[INFO] Trying to fetch via 12ft.io proxy: ${ftUrl}`);
-    
-    try {
-      const ftResponse = await fetch(ftUrl, {
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-          'Accept-Language': 'en-US,en;q=0.5',
-          'Referer': 'https://www.google.com/',
-          'Cache-Control': 'no-cache'
-        },
-        cache: 'no-store'
-      });
-      
-      if (ftResponse.ok) {
-        const html = await ftResponse.text();
-        if (html.length > 5000) { // Sanity check for valid response
-          console.log(`[INFO] 12ft.io successful! Got ${html.length} bytes`);
-          return new NextResponse(html, {
-            headers: {
-              'Content-Type': 'text/html; charset=utf-8',
-              'Cache-Control': 'public, max-age=3600'
-            }
-          });
-        }
-        console.log(`[INFO] 12ft.io returned too little content: ${html.length} bytes`);
-      } else {
-        console.log(`[INFO] 12ft.io approach failed: ${ftResponse.status} ${ftResponse.statusText}`);
-      }
-    } catch (ftError) {
-      console.log(`[INFO] 12ft.io approach error: ${ftError}`);
-    }
-    
-    // Second attempt: Try using allorigins proxy service
+    // First attempt: Try using allorigins proxy service
     const allOriginsUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
     console.log(`[INFO] Trying to fetch via allorigins proxy: ${allOriginsUrl}`);
     
@@ -95,7 +60,7 @@ export async function GET(request: NextRequest) {
       
       if (allOriginsResponse.ok) {
         const html = await allOriginsResponse.text();
-        if (html.length > 5000) { // Sanity check for valid response
+        if (html.length > 5000 && !html.includes('whoa there, pardner') && !html.includes('network policy')) { // Sanity check for valid response
           console.log(`[INFO] AllOrigins successful! Got ${html.length} bytes`);
           return new NextResponse(html, {
             headers: {
@@ -104,7 +69,7 @@ export async function GET(request: NextRequest) {
             }
           });
         }
-        console.log(`[INFO] AllOrigins returned too little content: ${html.length} bytes`);
+        console.log(`[INFO] AllOrigins returned too little content or blocking page: ${html.length} bytes`);
       } else {
         console.log(`[INFO] AllOrigins approach failed: ${allOriginsResponse.status} ${allOriginsResponse.statusText}`);
       }
@@ -112,7 +77,7 @@ export async function GET(request: NextRequest) {
       console.log(`[INFO] AllOrigins approach error: ${allOriginsError}`);
     }
     
-    // Third attempt: Try using archive.is service
+    // Second attempt: Try using archive.is service
     const archiveUrl = `https://archive.is/latest/${url}`;
     console.log(`[INFO] Trying to fetch from archive.is: ${archiveUrl}`);
     
@@ -128,7 +93,7 @@ export async function GET(request: NextRequest) {
       
       if (archiveResponse.ok) {
         const html = await archiveResponse.text();
-        if (html.length > 5000) { // Sanity check for valid response
+        if (html.length > 5000 && !html.includes('whoa there, pardner') && !html.includes('network policy')) { // Sanity check for valid response
           console.log(`[INFO] Archive.is successful! Got ${html.length} bytes`);
           return new NextResponse(html, {
             headers: {
@@ -137,7 +102,7 @@ export async function GET(request: NextRequest) {
             }
           });
         }
-        console.log(`[INFO] Archive.is returned too little content: ${html.length} bytes`);
+        console.log(`[INFO] Archive.is returned too little content or blocking page: ${html.length} bytes`);
       } else {
         console.log(`[INFO] Archive.is approach failed: ${archiveResponse.status} ${archiveResponse.statusText}`);
       }
@@ -145,7 +110,7 @@ export async function GET(request: NextRequest) {
       console.log(`[INFO] Archive.is approach error: ${archiveError}`);
     }
     
-    // Fourth attempt: Try direct fetch with old.reddit.com
+    // Third attempt: Try direct fetch with old.reddit.com
     let directUrl = url;
     if (directUrl.includes('www.reddit.com')) {
       directUrl = directUrl.replace('www.reddit.com', 'old.reddit.com');
@@ -156,7 +121,7 @@ export async function GET(request: NextRequest) {
     try {
       const directResponse = await fetch(directUrl, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
           'Accept-Language': 'en-US,en;q=0.9',
           'Referer': 'https://www.google.com/',
@@ -172,7 +137,7 @@ export async function GET(request: NextRequest) {
       
       if (directResponse.ok) {
         const html = await directResponse.text();
-        if (html.length > 5000) { // Sanity check for valid response
+        if (html.length > 5000 && !html.includes('whoa there, pardner') && !html.includes('network policy')) { // Sanity check for valid response
           console.log(`[INFO] Direct fetch successful! Got ${html.length} bytes`);
           return new NextResponse(html, {
             headers: {
@@ -181,12 +146,46 @@ export async function GET(request: NextRequest) {
             }
           });
         }
-        console.log(`[INFO] Direct fetch returned too little content: ${html.length} bytes`);
+        console.log(`[INFO] Direct fetch returned too little content or blocking page: ${html.length} bytes`);
       } else {
         console.log(`[INFO] Direct fetch failed: ${directResponse.status} ${directResponse.statusText}`);
       }
     } catch (directError) {
       console.log(`[INFO] Direct fetch error: ${directError}`);
+    }
+    
+    // Fourth attempt: Try with a different proxy service - cors-anywhere style
+    // Note: This is a fallback option that might not always work as these services often have rate limits
+    const corsProxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+    console.log(`[INFO] Trying to fetch via CORS proxy: ${corsProxyUrl}`);
+    
+    try {
+      const corsResponse = await fetch(corsProxyUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml',
+          'Cache-Control': 'no-cache'
+        },
+        cache: 'no-store'
+      });
+      
+      if (corsResponse.ok) {
+        const html = await corsResponse.text();
+        if (html.length > 5000 && !html.includes('whoa there, pardner') && !html.includes('network policy')) { // Sanity check for valid response
+          console.log(`[INFO] CORS proxy successful! Got ${html.length} bytes`);
+          return new NextResponse(html, {
+            headers: {
+              'Content-Type': 'text/html; charset=utf-8',
+              'Cache-Control': 'public, max-age=3600'
+            }
+          });
+        }
+        console.log(`[INFO] CORS proxy returned too little content or blocking page: ${html.length} bytes`);
+      } else {
+        console.log(`[INFO] CORS proxy approach failed: ${corsResponse.status} ${corsResponse.statusText}`);
+      }
+    } catch (corsError) {
+      console.log(`[INFO] CORS proxy approach error: ${corsError}`);
     }
     
     console.error(`[ERROR] All proxy methods failed for ${url}`);
