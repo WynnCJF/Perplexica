@@ -202,6 +202,9 @@ export const getDocumentsFromLinks = async ({ links }: { links: string[] }) => {
       // Convert to old.reddit.com for easier parsing
       if (url.includes('www.reddit.com')) {
         url = url.replace('www.reddit.com', 'old.reddit.com');
+      } else if (url.includes('reddit.com') && !url.includes('old.reddit.com')) {
+        // Also handle reddit.com (without www)
+        url = url.replace('reddit.com', 'old.reddit.com');
       }
     }
     

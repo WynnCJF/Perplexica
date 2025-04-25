@@ -42,10 +42,18 @@ export async function GET(request: NextRequest) {
       );
     }
     
-    console.log(`[INFO] Reddit proxy handling request for: ${url}`);
+    // Always convert to old.reddit.com format for better parsing
+    let normalizedUrl = url;
+    if (normalizedUrl.includes('www.reddit.com')) {
+      normalizedUrl = normalizedUrl.replace('www.reddit.com', 'old.reddit.com');
+    } else if (normalizedUrl.includes('reddit.com') && !normalizedUrl.includes('old.reddit.com')) {
+      normalizedUrl = normalizedUrl.replace('reddit.com', 'old.reddit.com');
+    }
+    
+    console.log(`[INFO] Reddit proxy handling request for: ${normalizedUrl} (original: ${url})`);
     
     // First attempt: Try using allorigins proxy service
-    const allOriginsUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+    const allOriginsUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(normalizedUrl)}`;
     console.log(`[INFO] Trying to fetch via allorigins proxy: ${allOriginsUrl}`);
     
     try {
@@ -78,7 +86,7 @@ export async function GET(request: NextRequest) {
     }
     
     // Second attempt: Try using archive.is service
-    const archiveUrl = `https://archive.is/latest/${url}`;
+    const archiveUrl = `https://archive.is/latest/${normalizedUrl}`;
     console.log(`[INFO] Trying to fetch from archive.is: ${archiveUrl}`);
     
     try {
@@ -111,15 +119,10 @@ export async function GET(request: NextRequest) {
     }
     
     // Third attempt: Try direct fetch with old.reddit.com
-    let directUrl = url;
-    if (directUrl.includes('www.reddit.com')) {
-      directUrl = directUrl.replace('www.reddit.com', 'old.reddit.com');
-    }
-    
-    console.log(`[INFO] Trying direct fetch with old.reddit.com: ${directUrl}`);
+    console.log(`[INFO] Trying direct fetch with old.reddit.com: ${normalizedUrl}`);
     
     try {
-      const directResponse = await fetch(directUrl, {
+      const directResponse = await fetch(normalizedUrl, {
         headers: {
           'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
@@ -156,7 +159,7 @@ export async function GET(request: NextRequest) {
     
     // Fourth attempt: Try with a different proxy service - cors-anywhere style
     // Note: This is a fallback option that might not always work as these services often have rate limits
-    const corsProxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+    const corsProxyUrl = `https://corsproxy.io/?${encodeURIComponent(normalizedUrl)}`;
     console.log(`[INFO] Trying to fetch via CORS proxy: ${corsProxyUrl}`);
     
     try {
@@ -188,7 +191,7 @@ export async function GET(request: NextRequest) {
       console.log(`[INFO] CORS proxy approach error: ${corsError}`);
     }
     
-    console.error(`[ERROR] All proxy methods failed for ${url}`);
+    console.error(`[ERROR] All proxy methods failed for ${normalizedUrl}`);
     return NextResponse.json(
       { error: `All proxy methods failed for Reddit URL` },
       { status: 502 }

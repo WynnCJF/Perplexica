@@ -352,6 +352,9 @@ class MetaSearchAgent implements MetaSearchAgentType {
                 let normalizedUrl = url;
                 if (normalizedUrl.includes('www.reddit.com')) {
                   normalizedUrl = normalizedUrl.replace('www.reddit.com', 'old.reddit.com');
+                } else if (normalizedUrl.includes('reddit.com') && !normalizedUrl.includes('old.reddit.com')) {
+                  // Also handle reddit.com (without www prefix)
+                  normalizedUrl = normalizedUrl.replace('reddit.com', 'old.reddit.com');
                 }
                 
                 // Determine if we're running in production (Vercel)
