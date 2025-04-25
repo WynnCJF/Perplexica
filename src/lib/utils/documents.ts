@@ -226,65 +226,73 @@ export const getDocumentsFromLinks = async ({ links }: { links: string[] }) => {
         try {
           console.log(`[INFO] Fetching Reddit content from: ${link}`);
           
-          // Add retry logic for Reddit fetches
-          let res;
-          let retries = 0;
-          const maxRetries = 3;
+          // Variable to store the response
+          let res: any;
           
-          while (retries < maxRetries) {
-            try {
-              // Add delay between retries to avoid rate limiting
-              if (retries > 0) {
-                const delayTime = 2000 * retries; // Exponential backoff
-                console.log(`[INFO] Retry ${retries}/${maxRetries} for ${link}, waiting ${delayTime}ms before retry...`);
-                await delay(delayTime);
+          // Determine if we're running in production (Vercel)
+          const isProduction = process.env.VERCEL === '1';
+          
+          // Use our proxy API for Reddit URLs when in production
+          if (isProduction && link.includes('reddit.com')) {
+            console.log(`[INFO] Using proxy API for Reddit URL in production environment`);
+            
+            // Use our internal API proxy when running on Vercel
+            const apiUrl = new URL('/api/reddit', process.env.VERCEL_URL || 'http://localhost:3000');
+            apiUrl.searchParams.set('url', link);
+            
+            console.log(`[INFO] Fetching from proxy API: ${apiUrl.toString()}`);
+            
+            const proxyResponse = await fetch(apiUrl.toString(), {
+              headers: {
+                'Accept': 'text/html',
               }
-              
-              // First try with old.reddit.com
-              let urlToFetch = link;
-              if (link.includes('www.reddit.com')) {
-                urlToFetch = link.replace('www.reddit.com', 'old.reddit.com');
-                console.log(`[INFO] Trying to fetch from old.reddit.com: ${urlToFetch}`);
+            });
+            
+            if (!proxyResponse.ok) {
+              throw new Error(`Proxy API returned ${proxyResponse.status}: ${proxyResponse.statusText}`);
+            }
+            
+            const htmlContent = await proxyResponse.text();
+            console.log(`[INFO] Successfully fetched ${link} via proxy API, got ${htmlContent.length} bytes`);
+            
+            // Create a mock response object for compatibility with the rest of the function
+            res = {
+              data: Buffer.from(htmlContent),
+              headers: {
+                'content-type': 'text/html'
               }
-              
+            };
+          } else {
+            // Standard approach for non-production or non-Reddit URLs
+            // Add retry logic for Reddit fetches
+            let retries = 0;
+            const maxRetries = 3;
+            
+            while (retries < maxRetries) {
               try {
-                res = await axios.get(urlToFetch, {
-                  responseType: 'arraybuffer',
-                  headers: {
-                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                    'Accept-Language': 'en-US,en;q=0.9',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Cache-Control': 'max-age=0',
-                    'Connection': 'keep-alive',
-                    'Sec-Fetch-Dest': 'document',
-                    'Sec-Fetch-Mode': 'navigate',
-                    'Sec-Fetch-Site': 'none',
-                    'Sec-Fetch-User': '?1',
-                    'Upgrade-Insecure-Requests': '1',
-                    'Sec-Ch-Ua': '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
-                    'Sec-Ch-Ua-Mobile': '?0',
-                    'Sec-Ch-Ua-Platform': '"macOS"',
-                    'Cookie': '' // Just empty cookie to simulate a fresh session
-                  },
-                  timeout: 10000, // 10 second timeout
-                  decompress: true, // Handle gzip compression
-                  maxRedirects: 5
-                });
-              } catch (firstError) {
-                // If old.reddit.com fails, try with www.reddit.com or reddit.com
-                console.log(`[WARN] Failed with old.reddit.com, trying with www.reddit.com`);
-                if (urlToFetch.includes('old.reddit.com')) {
-                  const alternateUrl = urlToFetch.replace('old.reddit.com', 'www.reddit.com');
-                  res = await axios.get(alternateUrl, {
+                // Add delay between retries to avoid rate limiting
+                if (retries > 0) {
+                  const delayTime = 2000 * retries; // Exponential backoff
+                  console.log(`[INFO] Retry ${retries}/${maxRetries} for ${link}, waiting ${delayTime}ms before retry...`);
+                  await delay(delayTime);
+                }
+                
+                // First try with old.reddit.com
+                let urlToFetch = link;
+                if (link.includes('www.reddit.com')) {
+                  urlToFetch = link.replace('www.reddit.com', 'old.reddit.com');
+                  console.log(`[INFO] Trying to fetch from old.reddit.com: ${urlToFetch}`);
+                }
+                
+                try {
+                  res = await axios.get(urlToFetch, {
                     responseType: 'arraybuffer',
                     headers: {
                       'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
                       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
                       'Accept-Language': 'en-US,en;q=0.9',
                       'Accept-Encoding': 'gzip, deflate, br',
-                      'Cache-Control': 'no-cache',
-                      'Pragma': 'no-cache',
+                      'Cache-Control': 'max-age=0',
                       'Connection': 'keep-alive',
                       'Sec-Fetch-Dest': 'document',
                       'Sec-Fetch-Mode': 'navigate',
@@ -294,220 +302,250 @@ export const getDocumentsFromLinks = async ({ links }: { links: string[] }) => {
                       'Sec-Ch-Ua': '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
                       'Sec-Ch-Ua-Mobile': '?0',
                       'Sec-Ch-Ua-Platform': '"macOS"',
-                      'Referer': 'https://www.google.com/' // Add referer to look more like a real browser
+                      'Cookie': '' // Just empty cookie to simulate a fresh session
                     },
-                    timeout: 10000,
-                    decompress: true,
+                    timeout: 10000, // 10 second timeout
+                    decompress: true, // Handle gzip compression
                     maxRedirects: 5
                   });
+                } catch (firstError) {
+                  // If old.reddit.com fails, try with www.reddit.com or reddit.com
+                  console.log(`[WARN] Failed with old.reddit.com, trying with www.reddit.com`);
+                  if (urlToFetch.includes('old.reddit.com')) {
+                    const alternateUrl = urlToFetch.replace('old.reddit.com', 'www.reddit.com');
+                    res = await axios.get(alternateUrl, {
+                      responseType: 'arraybuffer',
+                      headers: {
+                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                        'Accept-Language': 'en-US,en;q=0.9',
+                        'Accept-Encoding': 'gzip, deflate, br',
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache',
+                        'Connection': 'keep-alive',
+                        'Sec-Fetch-Dest': 'document',
+                        'Sec-Fetch-Mode': 'navigate',
+                        'Sec-Fetch-Site': 'none',
+                        'Sec-Fetch-User': '?1',
+                        'Upgrade-Insecure-Requests': '1',
+                        'Sec-Ch-Ua': '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
+                        'Sec-Ch-Ua-Mobile': '?0',
+                        'Sec-Ch-Ua-Platform': '"macOS"',
+                        'Referer': 'https://www.google.com/' // Add referer to look more like a real browser
+                      },
+                      timeout: 10000,
+                      decompress: true,
+                      maxRedirects: 5
+                    });
+                  } else {
+                    throw firstError;
+                  }
+                }
+                
+                // If successful, break the retry loop
+                break;
+              } catch (error: any) {
+                retries++;
+                const status = error.response?.status;
+                
+                if (status === 429) {
+                  // Rate limiting error - we need to wait longer
+                  console.log(`[WARN] Rate limited (429) when fetching ${link}. Retry ${retries}/${maxRetries}`);
+                  if (retries >= maxRetries) {
+                    throw new Error(`Rate limited by Reddit after ${maxRetries} retries`);
+                  }
                 } else {
-                  throw firstError;
-                }
-              }
-              
-              // If successful, break the retry loop
-              break;
-            } catch (error: any) {
-              retries++;
-              const status = error.response?.status;
-              
-              if (status === 429) {
-                // Rate limiting error - we need to wait longer
-                console.log(`[WARN] Rate limited (429) when fetching ${link}. Retry ${retries}/${maxRetries}`);
-                if (retries >= maxRetries) {
-                  throw new Error(`Rate limited by Reddit after ${maxRetries} retries`);
-                }
-              } else {
-                // Other error - might be worth retrying
-                console.error(`[ERROR] Failed to fetch ${link}: ${error.message || error}`);
-                if (retries >= maxRetries) {
-                  throw error;
+                  // Other error - might be worth retrying
+                  console.error(`[ERROR] Failed to fetch ${link}: ${error.message || error}`);
+                  if (retries >= maxRetries) {
+                    throw error;
+                  }
                 }
               }
             }
-          }
-          
-          // If we've reached here without a response, there was an issue
-          if (!res) {
-            throw new Error(`Failed to get response for ${link} after ${maxRetries} attempts`);
-          }
+            
+            // If we've reached here without a response, there was an issue
+            if (!res) {
+              throw new Error(`Failed to get response for ${link} after ${maxRetries} attempts`);
+            }
 
-          const isPdf = res.headers['content-type'] === 'application/pdf';
+            const isPdf = res.headers['content-type'] === 'application/pdf';
 
-          if (isPdf) {
-            const pdfText = await pdfParse(res.data);
-            const parsedText = pdfText.text
+            if (isPdf) {
+              const pdfText = await pdfParse(res.data);
+              const parsedText = pdfText.text
+                .replace(/(\r\n|\n|\r)/gm, ' ')
+                .replace(/\s+/g, ' ')
+                .trim();
+
+              const splittedText = await splitter.splitText(parsedText);
+              const title = 'PDF Document';
+
+              const linkDocs = splittedText.map((text) => {
+                return new Document({
+                  pageContent: text,
+                  metadata: {
+                    title: title,
+                    url: link,
+                  },
+                });
+              });
+
+              docs.push(...linkDocs);
+              return;
+            }
+
+            // Special handling for Reddit content
+            if (link.includes('reddit.com')) {
+              const htmlContent = res.data.toString('utf8');
+              
+              // Save the complete HTML to debug folder for further analysis (only if DEBUG_SAVE_HTML=true)
+              const htmlPath = saveHtmlToDebug(htmlContent, link, 'reddit_full_extraction');
+              if (htmlPath) {
+                console.log(`[INFO] Saved complete HTML for full extraction from ${link} to ${htmlPath}`);
+              }
+              
+              console.log(`[INFO] Successfully retrieved HTML content for ${link} (${htmlContent.length} bytes)`);
+              
+              // Use the dedicated Reddit content extractor
+              const extractedReddit = extractRedditContent(htmlContent);
+              
+              if (extractedReddit.success) {
+                console.log(`[INFO] Successfully extracted Reddit content: ${extractedReddit.title}`);
+                console.log(`[INFO] Post content length: ${extractedReddit.postContent.length} chars`);
+                console.log(`[INFO] Extracted ${extractedReddit.comments.length} comments`);
+                
+                // Format the content with clear structure
+                let formattedContent = `# ${extractedReddit.title}\n\n`;
+                
+                // Add post content if available
+                if (extractedReddit.postContent.trim().length > 0) {
+                  formattedContent += `## Original Post\n\n${extractedReddit.postContent.trim()}\n\n`;
+                }
+                
+                // Add comments if available
+                if (extractedReddit.comments.length > 0) {
+                  formattedContent += `## Comments\n\n`;
+                  extractedReddit.comments.forEach(comment => {
+                    // Include score if available
+                    const scoreText = comment.score ? ` (${comment.score} points)` : '';
+                    formattedContent += `**${comment.author}${scoreText}**:\n${comment.text}\n\n`;
+                  });
+                }
+                
+                // Create the document with the formatted content
+                const document = new Document({
+                  pageContent: formattedContent.trim(),
+                  metadata: {
+                    title: extractedReddit.title,
+                    url: link,
+                    commentCount: extractedReddit.comments.length,
+                    isReddit: true
+                  },
+                });
+                
+                console.log(`[INFO] Created Reddit document with ${formattedContent.length} characters`);
+                docs.push(document);
+                return;
+              }
+              
+              console.log('[DEBUG] Targeted extraction failed, falling back to general extraction');
+              
+              // Original fallback approach with improved selectors
+              let extractedText = htmlToText(htmlContent, {
+                selectors: [
+                  { selector: 'div.md', format: 'block' },
+                  { selector: 'div.thing', format: 'block' },
+                  { selector: 'div.usertext-body', format: 'block' }
+                ],
+                wordwrap: false
+              });
+              
+              // If the above fails to get meaningful content, try without selectors
+              if (extractedText.length < 500) {
+                console.log('[DEBUG] First attempt returned too little content, trying without selectors');
+                extractedText = htmlToText(htmlContent, { wordwrap: false });
+              }
+              
+              // Remove common Reddit UI elements and metadata with more comprehensive patterns
+              const cleanedText = extractedText
+                .replace(/jump to content|my subreddits|edit subscriptions|popular|all|random|users/gi, '')
+                .replace(/permalink|embed|save|report|give award|reply|share|crosspost/gi, '')
+                .replace(/about|blog|advertising|careers|help|site rules|Reddit help center|reddiquette/gi, '')
+                .replace(/mod guidelines|contact us|apps & tools|Reddit for iPhone|Reddit for Android/gi, '')
+                .replace(/use of this site constitutes acceptance of our user agreement and privacy policy/gi, '')
+                .replace(/© \d+ reddit inc\. all rights reserved/gi, '')
+                .replace(/REDDIT and the ALIEN Logo are registered trademarks of reddit inc\./gi, '')
+                .replace(/Rendered by PID \d+ on[\s\S]*?\+00:00 running[^.]+\./g, '')
+                .replace(/get reddit premium|reddit premium/gi, '')
+                .replace(/level \d+|award|points?|votes?|archived|this is an archived post/gi, '')
+                .replace(/\[\+\]|\[\-\]|points?|\d+ (children|child)|expand|collapse|continue this thread/gi, '')
+                .replace(/submitted \d+ (years?|months?|days?|hours?|minutes?|seconds?) ago( by [^ ]+)?/gi, '')
+                .replace(/[\d,]+ comments|[\d,]+ points|[\d]% upvoted/gi, '')
+                .replace(/join|leave|sort by: best|top|new|controversial|old|q&a/gi, '')
+                .replace(/\bBEST\b|\bNEW\b|\bTOP\b|\bHOT\b|\bCONTROVERSIAL\b|\bRISING\b/gi, '')
+                .replace(/\s{2,}/g, ' ')
+                .replace(/\n{3,}/g, '\n\n')
+                .trim();
+              
+              // Skip extraction if we didn't get meaningful content
+              if (cleanedText.length < 200 || cleanedText.includes('Page not found')) {
+                console.log('[DEBUG] Skipping document creation - insufficient content extracted');
+                // Don't create a document for this URL
+                return;
+              }
+              
+              // Extract the title more reliably for the fallback method
+              const title = extractedReddit.title || 'Reddit Discussion';
+              
+              // Create a single document with the content
+              const document = new Document({
+                pageContent: cleanedText,
+                metadata: {
+                  title: title,
+                  url: link,
+                  isReddit: true
+                },
+              });
+              
+              console.log(`[DEBUG] Created document for ${link} with ${cleanedText.length} characters`);
+              docs.push(document);
+              return;
+            }
+
+            // Default handling for non-Reddit, non-PDF content
+            const parsedText = htmlToText(res.data.toString('utf8'), {
+              selectors: [
+                {
+                  selector: 'a',
+                  format: 'inline',
+                  options: {
+                    ignoreHref: true,
+                  },
+                },
+              ],
+            })
               .replace(/(\r\n|\n|\r)/gm, ' ')
               .replace(/\s+/g, ' ')
               .trim();
 
             const splittedText = await splitter.splitText(parsedText);
-            const title = 'PDF Document';
+            const title = res.data
+              .toString('utf8')
+              .match(/<title>(.*?)<\/title>/)?.[1];
 
             const linkDocs = splittedText.map((text) => {
               return new Document({
                 pageContent: text,
                 metadata: {
-                  title: title,
+                  title: title || link,
                   url: link,
                 },
               });
             });
 
             docs.push(...linkDocs);
-            return;
           }
-
-          // Special handling for Reddit content
-          if (link.includes('reddit.com')) {
-            const htmlContent = res.data.toString('utf8');
-            
-            // Save the complete HTML to debug folder for further analysis (only if DEBUG_SAVE_HTML=true)
-            const htmlPath = saveHtmlToDebug(htmlContent, link, 'reddit_full_extraction');
-            if (htmlPath) {
-              console.log(`[INFO] Saved complete HTML for full extraction from ${link} to ${htmlPath}`);
-            }
-            
-            console.log(`[INFO] Successfully retrieved HTML content for ${link} (${htmlContent.length} bytes)`);
-            
-            // Use the dedicated Reddit content extractor
-            const extractedReddit = extractRedditContent(htmlContent);
-            
-            if (extractedReddit.success) {
-              console.log(`[INFO] Successfully extracted Reddit content: ${extractedReddit.title}`);
-              console.log(`[INFO] Post content length: ${extractedReddit.postContent.length} chars`);
-              console.log(`[INFO] Extracted ${extractedReddit.comments.length} comments`);
-              
-              // Format the content with clear structure
-              let formattedContent = `# ${extractedReddit.title}\n\n`;
-              
-              // Add post content if available
-              if (extractedReddit.postContent.trim().length > 0) {
-                formattedContent += `## Original Post\n\n${extractedReddit.postContent.trim()}\n\n`;
-              }
-              
-              // Add comments if available
-              if (extractedReddit.comments.length > 0) {
-                formattedContent += `## Comments\n\n`;
-                extractedReddit.comments.forEach(comment => {
-                  // Include score if available
-                  const scoreText = comment.score ? ` (${comment.score} points)` : '';
-                  formattedContent += `**${comment.author}${scoreText}**:\n${comment.text}\n\n`;
-                });
-              }
-              
-              // Create the document with the formatted content
-              const document = new Document({
-                pageContent: formattedContent.trim(),
-                metadata: {
-                  title: extractedReddit.title,
-                  url: link,
-                  commentCount: extractedReddit.comments.length,
-                  isReddit: true
-                },
-              });
-              
-              console.log(`[INFO] Created Reddit document with ${formattedContent.length} characters`);
-              docs.push(document);
-              return;
-            }
-            
-            console.log('[DEBUG] Targeted extraction failed, falling back to general extraction');
-            
-            // Original fallback approach with improved selectors
-            let extractedText = htmlToText(htmlContent, {
-              selectors: [
-                { selector: 'div.md', format: 'block' },
-                { selector: 'div.thing', format: 'block' },
-                { selector: 'div.usertext-body', format: 'block' }
-              ],
-              wordwrap: false
-            });
-            
-            // If the above fails to get meaningful content, try without selectors
-            if (extractedText.length < 500) {
-              console.log('[DEBUG] First attempt returned too little content, trying without selectors');
-              extractedText = htmlToText(htmlContent, { wordwrap: false });
-            }
-            
-            // Remove common Reddit UI elements and metadata with more comprehensive patterns
-            const cleanedText = extractedText
-              .replace(/jump to content|my subreddits|edit subscriptions|popular|all|random|users/gi, '')
-              .replace(/permalink|embed|save|report|give award|reply|share|crosspost/gi, '')
-              .replace(/about|blog|advertising|careers|help|site rules|Reddit help center|reddiquette/gi, '')
-              .replace(/mod guidelines|contact us|apps & tools|Reddit for iPhone|Reddit for Android/gi, '')
-              .replace(/use of this site constitutes acceptance of our user agreement and privacy policy/gi, '')
-              .replace(/© \d+ reddit inc\. all rights reserved/gi, '')
-              .replace(/REDDIT and the ALIEN Logo are registered trademarks of reddit inc\./gi, '')
-              .replace(/Rendered by PID \d+ on[\s\S]*?\+00:00 running[^.]+\./g, '')
-              .replace(/get reddit premium|reddit premium/gi, '')
-              .replace(/level \d+|award|points?|votes?|archived|this is an archived post/gi, '')
-              .replace(/\[\+\]|\[\-\]|points?|\d+ (children|child)|expand|collapse|continue this thread/gi, '')
-              .replace(/submitted \d+ (years?|months?|days?|hours?|minutes?|seconds?) ago( by [^ ]+)?/gi, '')
-              .replace(/[\d,]+ comments|[\d,]+ points|[\d]% upvoted/gi, '')
-              .replace(/join|leave|sort by: best|top|new|controversial|old|q&a/gi, '')
-              .replace(/\bBEST\b|\bNEW\b|\bTOP\b|\bHOT\b|\bCONTROVERSIAL\b|\bRISING\b/gi, '')
-              .replace(/\s{2,}/g, ' ')
-              .replace(/\n{3,}/g, '\n\n')
-              .trim();
-            
-            // Skip extraction if we didn't get meaningful content
-            if (cleanedText.length < 200 || cleanedText.includes('Page not found')) {
-              console.log('[DEBUG] Skipping document creation - insufficient content extracted');
-              // Don't create a document for this URL
-              return;
-            }
-            
-            // Extract the title more reliably for the fallback method
-            const title = extractedReddit.title || 'Reddit Discussion';
-            
-            // Create a single document with the content
-            const document = new Document({
-              pageContent: cleanedText,
-              metadata: {
-                title: title,
-                url: link,
-                isReddit: true
-              },
-            });
-            
-            console.log(`[DEBUG] Created document for ${link} with ${cleanedText.length} characters`);
-            docs.push(document);
-            return;
-          }
-
-          // Default handling for non-Reddit, non-PDF content
-          const parsedText = htmlToText(res.data.toString('utf8'), {
-            selectors: [
-              {
-                selector: 'a',
-                format: 'inline',
-                options: {
-                  ignoreHref: true,
-                },
-              },
-            ],
-          })
-            .replace(/(\r\n|\n|\r)/gm, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-
-          const splittedText = await splitter.splitText(parsedText);
-          const title = res.data
-            .toString('utf8')
-            .match(/<title>(.*?)<\/title>/)?.[1];
-
-          const linkDocs = splittedText.map((text) => {
-            return new Document({
-              pageContent: text,
-              metadata: {
-                title: title || link,
-                url: link,
-              },
-            });
-          });
-
-          docs.push(...linkDocs);
         } catch (error) {
           console.error(
             `[ERROR] An error occurred while getting documents from link ${link}: `,
