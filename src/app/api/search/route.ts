@@ -11,8 +11,12 @@ import {
   getCustomOpenaiApiKey,
   getCustomOpenaiApiUrl,
   getCustomOpenaiModelName,
+  verifyRequiredConfig,
 } from '@/lib/config';
 import { searchHandlers } from '@/lib/search';
+
+// Verify configuration on server startup
+verifyRequiredConfig();
 
 interface chatModel {
   provider: string;

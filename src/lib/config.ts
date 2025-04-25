@@ -33,6 +33,10 @@ interface Config {
   };
   API_ENDPOINTS: {
     SEARXNG: string;
+    GOOGLE_PSE: {
+      API_KEY: string;
+      ENGINE_ID: string;
+    };
   };
 }
 
@@ -40,37 +44,99 @@ type RecursivePartial<T> = {
   [P in keyof T]?: RecursivePartial<T[P]>;
 };
 
-const loadConfig = () =>
-  toml.parse(
-    fs.readFileSync(path.join(process.cwd(), `${configFileName}`), 'utf-8'),
-  ) as any as Config;
+// Enhanced loadConfig function that handles missing file gracefully
+const loadConfig = (): Partial<Config> => {
+  try {
+    const configPath = path.join(process.cwd(), configFileName);
+    if (fs.existsSync(configPath)) {
+      return toml.parse(
+        fs.readFileSync(configPath, 'utf-8')
+      ) as any as Config;
+    }
+    // If running in production/deployment and no config file exists
+    console.log('Config file not found, using environment variables only');
+    return {} as Partial<Config>;
+  } catch (error) {
+    console.error('Error loading config file:', error);
+    return {} as Partial<Config>;
+  }
+};
 
-export const getSimilarityMeasure = () =>
-  loadConfig().GENERAL.SIMILARITY_MEASURE;
+// Safe accessor function for nested config properties
+const getConfigValue = <T>(accessor: (config: Config) => T, defaultValue: T): T => {
+  try {
+    const config = loadConfig();
+    return accessor(config as Config) || defaultValue;
+  } catch (error) {
+    return defaultValue;
+  }
+};
 
-export const getKeepAlive = () => loadConfig().GENERAL.KEEP_ALIVE;
+export const getSimilarityMeasure = () => 
+  process.env.SIMILARITY_MEASURE || 
+  getConfigValue(config => config.GENERAL.SIMILARITY_MEASURE, 'cosine');
 
-export const getOpenaiApiKey = () => loadConfig().MODELS.OPENAI.API_KEY;
+export const getKeepAlive = () => 
+  process.env.KEEP_ALIVE || 
+  getConfigValue(config => config.GENERAL.KEEP_ALIVE, '5m');
 
-export const getGroqApiKey = () => loadConfig().MODELS.GROQ.API_KEY;
+export const getOpenaiApiKey = () => 
+  process.env.OPENAI_API_KEY || 
+  getConfigValue(config => config.MODELS.OPENAI.API_KEY, '');
 
-export const getAnthropicApiKey = () => loadConfig().MODELS.ANTHROPIC.API_KEY;
+export const getGroqApiKey = () => 
+  process.env.GROQ_API_KEY || 
+  getConfigValue(config => config.MODELS.GROQ.API_KEY, '');
 
-export const getGeminiApiKey = () => loadConfig().MODELS.GEMINI.API_KEY;
+export const getAnthropicApiKey = () => 
+  process.env.ANTHROPIC_API_KEY || 
+  getConfigValue(config => config.MODELS.ANTHROPIC.API_KEY, '');
+
+export const getGeminiApiKey = () => 
+  process.env.GEMINI_API_KEY || 
+  getConfigValue(config => config.MODELS.GEMINI.API_KEY, '');
 
 export const getSearxngApiEndpoint = () =>
-  process.env.SEARXNG_API_URL || loadConfig().API_ENDPOINTS.SEARXNG;
+  process.env.SEARXNG_API_URL || 
+  getConfigValue(config => config.API_ENDPOINTS.SEARXNG, '');
 
-export const getOllamaApiEndpoint = () => loadConfig().MODELS.OLLAMA.API_URL;
+export const getOllamaApiEndpoint = () => 
+  process.env.OLLAMA_API_URL || 
+  getConfigValue(config => config.MODELS.OLLAMA.API_URL, '');
 
 export const getCustomOpenaiApiKey = () =>
-  loadConfig().MODELS.CUSTOM_OPENAI.API_KEY;
+  process.env.CUSTOM_OPENAI_API_KEY || 
+  getConfigValue(config => config.MODELS.CUSTOM_OPENAI.API_KEY, '');
 
 export const getCustomOpenaiApiUrl = () =>
-  loadConfig().MODELS.CUSTOM_OPENAI.API_URL;
+  process.env.CUSTOM_OPENAI_API_URL || 
+  getConfigValue(config => config.MODELS.CUSTOM_OPENAI.API_URL, '');
 
 export const getCustomOpenaiModelName = () =>
-  loadConfig().MODELS.CUSTOM_OPENAI.MODEL_NAME;
+  process.env.CUSTOM_OPENAI_MODEL_NAME || 
+  getConfigValue(config => config.MODELS.CUSTOM_OPENAI.MODEL_NAME, '');
+
+export const getGooglePseApiKey = () => 
+  process.env.GOOGLE_PSE_API_KEY || 
+  getConfigValue(config => config.API_ENDPOINTS.GOOGLE_PSE.API_KEY, '');
+
+export const getGooglePseEngineId = () =>
+  process.env.GOOGLE_PSE_ID || 
+  getConfigValue(config => config.API_ENDPOINTS.GOOGLE_PSE.ENGINE_ID, '');
+
+// Verify critical configuration is available
+export const verifyRequiredConfig = () => {
+  // Check Google PSE configuration
+  const googlePseKey = getGooglePseApiKey();
+  const googlePseId = getGooglePseEngineId();
+  
+  if (!googlePseKey || !googlePseId) {
+    console.warn('WARNING: Missing Google PSE configuration. Search functionality may not work correctly.');
+  }
+  
+  // Check other critical configurations as needed
+  // Add more checks here as required for your application
+};
 
 const mergeConfigs = (current: any, update: any): any => {
   if (update === null || update === undefined) {
@@ -104,10 +170,20 @@ const mergeConfigs = (current: any, update: any): any => {
 };
 
 export const updateConfig = (config: RecursivePartial<Config>) => {
-  const currentConfig = loadConfig();
-  const mergedConfig = mergeConfigs(currentConfig, config);
-  fs.writeFileSync(
-    path.join(path.join(process.cwd(), `${configFileName}`)),
-    toml.stringify(mergedConfig),
-  );
+  try {
+    const configPath = path.join(process.cwd(), configFileName);
+    let currentConfig = {} as Config;
+    
+    // Load existing config if it exists
+    if (fs.existsSync(configPath)) {
+      currentConfig = loadConfig() as Config;
+    }
+    
+    const mergedConfig = mergeConfigs(currentConfig, config);
+    fs.writeFileSync(configPath, toml.stringify(mergedConfig));
+    return true;
+  } catch (error) {
+    console.error('Error updating config file:', error);
+    return false;
+  }
 };

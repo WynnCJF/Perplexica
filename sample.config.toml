@@ -24,3 +24,7 @@ API_URL = "" # Ollama API URL - http://host.docker.internal:11434
 
 [API_ENDPOINTS]
 SEARXNG = "" # SearxNG API URL - http://localhost:32768
+
+[API_ENDPOINTS.GOOGLE_PSE]
+API_KEY = "" # Your Google Programmable Search Engine API key
+ENGINE_ID = "" # Your Google Programmable Search Engine ID
