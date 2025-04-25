@@ -363,7 +363,11 @@ class MetaSearchAgent implements MetaSearchAgentType {
                 
                 if (isProduction) {
                   // Use our internal API proxy when running on Vercel
-                  const apiUrl = new URL('/api/reddit', process.env.VERCEL_URL || 'http://localhost:3000');
+                  // Fix URL construction by ensuring we have a complete URL with https:// prefix
+                  const baseUrl = process.env.VERCEL_URL 
+                    ? `https://${process.env.VERCEL_URL}` 
+                    : 'http://localhost:3000';
+                  const apiUrl = new URL('/api/reddit', baseUrl);
                   apiUrl.searchParams.set('url', url);
                   
                   const proxyResponse = await fetch(apiUrl.toString(), {
@@ -1060,7 +1064,6 @@ The sources are listed below, numbered from 1 to ${docs.length}. Use these numbe
         event.event === 'on_chain_end' &&
         event.name === 'FinalSourceRetriever'
       ) {
-        ``;
         emitter.emit(
           'data',
           JSON.stringify({ type: 'sources', data: event.data.output }),

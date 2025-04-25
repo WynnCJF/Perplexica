@@ -237,7 +237,11 @@ export const getDocumentsFromLinks = async ({ links }: { links: string[] }) => {
             console.log(`[INFO] Using proxy API for Reddit URL in production environment`);
             
             // Use our internal API proxy when running on Vercel
-            const apiUrl = new URL('/api/reddit', process.env.VERCEL_URL || 'http://localhost:3000');
+            // Fix URL construction by ensuring we have a complete URL with https:// prefix
+            const baseUrl = process.env.VERCEL_URL 
+              ? `https://${process.env.VERCEL_URL}` 
+              : 'http://localhost:3000';
+            const apiUrl = new URL('/api/reddit', baseUrl);
             apiUrl.searchParams.set('url', link);
             
             console.log(`[INFO] Fetching from proxy API: ${apiUrl.toString()}`);
