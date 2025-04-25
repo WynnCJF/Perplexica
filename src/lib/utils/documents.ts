@@ -240,13 +240,70 @@ export const getDocumentsFromLinks = async ({ links }: { links: string[] }) => {
                 await delay(delayTime);
               }
               
-              res = await axios.get(link, {
-                responseType: 'arraybuffer',
-                headers: {
-                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                },
-                timeout: 10000, // 10 second timeout
-              });
+              // First try with old.reddit.com
+              let urlToFetch = link;
+              if (link.includes('www.reddit.com')) {
+                urlToFetch = link.replace('www.reddit.com', 'old.reddit.com');
+                console.log(`[INFO] Trying to fetch from old.reddit.com: ${urlToFetch}`);
+              }
+              
+              try {
+                res = await axios.get(urlToFetch, {
+                  responseType: 'arraybuffer',
+                  headers: {
+                    'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                    'Accept-Language': 'en-US,en;q=0.9',
+                    'Accept-Encoding': 'gzip, deflate, br',
+                    'Cache-Control': 'max-age=0',
+                    'Connection': 'keep-alive',
+                    'Sec-Fetch-Dest': 'document',
+                    'Sec-Fetch-Mode': 'navigate',
+                    'Sec-Fetch-Site': 'none',
+                    'Sec-Fetch-User': '?1',
+                    'Upgrade-Insecure-Requests': '1',
+                    'Sec-Ch-Ua': '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
+                    'Sec-Ch-Ua-Mobile': '?0',
+                    'Sec-Ch-Ua-Platform': '"macOS"',
+                    'Cookie': '' // Just empty cookie to simulate a fresh session
+                  },
+                  timeout: 10000, // 10 second timeout
+                  decompress: true, // Handle gzip compression
+                  maxRedirects: 5
+                });
+              } catch (firstError) {
+                // If old.reddit.com fails, try with www.reddit.com or reddit.com
+                console.log(`[WARN] Failed with old.reddit.com, trying with www.reddit.com`);
+                if (urlToFetch.includes('old.reddit.com')) {
+                  const alternateUrl = urlToFetch.replace('old.reddit.com', 'www.reddit.com');
+                  res = await axios.get(alternateUrl, {
+                    responseType: 'arraybuffer',
+                    headers: {
+                      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                      'Accept-Language': 'en-US,en;q=0.9',
+                      'Accept-Encoding': 'gzip, deflate, br',
+                      'Cache-Control': 'no-cache',
+                      'Pragma': 'no-cache',
+                      'Connection': 'keep-alive',
+                      'Sec-Fetch-Dest': 'document',
+                      'Sec-Fetch-Mode': 'navigate',
+                      'Sec-Fetch-Site': 'none',
+                      'Sec-Fetch-User': '?1',
+                      'Upgrade-Insecure-Requests': '1',
+                      'Sec-Ch-Ua': '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
+                      'Sec-Ch-Ua-Mobile': '?0',
+                      'Sec-Ch-Ua-Platform': '"macOS"',
+                      'Referer': 'https://www.google.com/' // Add referer to look more like a real browser
+                    },
+                    timeout: 10000,
+                    decompress: true,
+                    maxRedirects: 5
+                  });
+                } else {
+                  throw firstError;
+                }
+              }
               
               // If successful, break the retry loop
               break;

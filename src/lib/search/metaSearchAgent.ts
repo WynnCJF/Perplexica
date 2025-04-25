@@ -369,13 +369,66 @@ class MetaSearchAgent implements MetaSearchAgentType {
                       await delay(delayTime);
                     }
                     
-                    response = await axios.get(normalizedUrl, {
-                      responseType: 'text',
-                      headers: {
-                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-                      },
-                      timeout: 5000, // Shorter timeout for initial analysis
-                    });
+                    // First try with old.reddit.com
+                    let urlToFetch = normalizedUrl;
+                    
+                    try {
+                      response = await axios.get(urlToFetch, {
+                        responseType: 'text',
+                        headers: {
+                          'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                          'Accept-Language': 'en-US,en;q=0.9',
+                          'Accept-Encoding': 'gzip, deflate, br',
+                          'Cache-Control': 'max-age=0',
+                          'Connection': 'keep-alive',
+                          'Sec-Fetch-Dest': 'document',
+                          'Sec-Fetch-Mode': 'navigate',
+                          'Sec-Fetch-Site': 'none',
+                          'Sec-Fetch-User': '?1',
+                          'Upgrade-Insecure-Requests': '1',
+                          'Sec-Ch-Ua': '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
+                          'Sec-Ch-Ua-Mobile': '?0',
+                          'Sec-Ch-Ua-Platform': '"macOS"',
+                          'Cookie': '' // Just empty cookie to simulate a fresh session
+                        },
+                        timeout: 5000, // Shorter timeout for initial analysis
+                        decompress: true, // Handle gzip compression
+                        maxRedirects: 5
+                      });
+                    } catch (firstError) {
+                      // If old.reddit.com fails, try with www.reddit.com
+                      console.log(`[WARN] Failed with first URL, trying alternative domain`);
+                      if (urlToFetch.includes('old.reddit.com')) {
+                        const alternateUrl = urlToFetch.replace('old.reddit.com', 'www.reddit.com');
+                        response = await axios.get(alternateUrl, {
+                          responseType: 'text',
+                          headers: {
+                            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                            'Accept-Language': 'en-US,en;q=0.9',
+                            'Accept-Encoding': 'gzip, deflate, br',
+                            'Cache-Control': 'no-cache',
+                            'Pragma': 'no-cache',
+                            'Connection': 'keep-alive',
+                            'Sec-Fetch-Dest': 'document',
+                            'Sec-Fetch-Mode': 'navigate',
+                            'Sec-Fetch-Site': 'none',
+                            'Sec-Fetch-User': '?1',
+                            'Upgrade-Insecure-Requests': '1',
+                            'Sec-Ch-Ua': '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
+                            'Sec-Ch-Ua-Mobile': '?0',
+                            'Sec-Ch-Ua-Platform': '"macOS"',
+                            'Referer': 'https://www.google.com/' // Add referer to look more like a real browser
+                          },
+                          timeout: 5000,
+                          decompress: true,
+                          maxRedirects: 5
+                        });
+                      } else {
+                        throw firstError;
+                      }
+                    }
                     
                     // If successful, break the retry loop
                     break;
@@ -498,7 +551,7 @@ class MetaSearchAgent implements MetaSearchAgentType {
             // Analyze all URLs in parallel with rate limiting
             console.log(`[INFO] Starting analysis of URLs with rate limiting...`);
             
-            // Process URLs in batches to prevent rate limiting
+            // Process URLs in batches
             const BATCH_SIZE = 3; // Process 3 URLs at a time
             const BATCH_DELAY = 3000; // Wait 3 seconds between batches
             
@@ -571,10 +624,17 @@ class MetaSearchAgent implements MetaSearchAgentType {
               // Save the complete ranking log to a file
               logRedditRanking(rankingLog, 'reddit_ranking_complete');
               
-              // If no documents were fetched successfully, fall back to search snippets
-              if (documents.length === 0) {
-                console.log('[INFO] No documents fetched from Reddit URLs, falling back to snippets');
-                documents = redditResults.map(
+              // Check if we have any successful document fetches
+              const successfulDocuments = documents.filter(doc => 
+                doc.pageContent && doc.pageContent.length > 100
+              );
+              
+              // If no documents were fetched successfully or too few, fall back to search snippets
+              if (successfulDocuments.length < 2) {
+                console.log('[INFO] Too few documents fetched from Reddit URLs, falling back to snippets');
+                
+                // Add any successfully fetched documents first
+                const snippetDocuments = redditResults.map(
                   (result) =>
                     new Document({
                       pageContent:
@@ -586,9 +646,14 @@ class MetaSearchAgent implements MetaSearchAgentType {
                         title: result.title,
                         url: result.url,
                         ...(result.img_src && { img_src: result.img_src }),
+                        isSnippet: true
                       },
                     }),
                 );
+                
+                // Merge the documents (successful fetches + search snippets)
+                documents = [...successfulDocuments, ...snippetDocuments];
+                console.log(`[INFO] Combined ${successfulDocuments.length} fetched documents with ${snippetDocuments.length} snippet documents`);
               }
             } else {
               // No Reddit results, use original search results
@@ -608,23 +673,6 @@ class MetaSearchAgent implements MetaSearchAgentType {
                   }),
               );
             }
-          } else {
-            // No Reddit results, use original search results
-            documents = res.results.map(
-              (result) =>
-                new Document({
-                  pageContent:
-                    result.content ||
-                    (this.config.activeEngines.includes('youtube')
-                      ? result.title
-                      : ''),
-                  metadata: {
-                    title: result.title,
-                    url: result.url,
-                    ...(result.img_src && { img_src: result.img_src }),
-                  },
-                }),
-            );
           }
 
           return { query: question, docs: documents };
