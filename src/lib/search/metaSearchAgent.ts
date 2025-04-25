@@ -361,28 +361,66 @@ class MetaSearchAgent implements MetaSearchAgentType {
                 console.log(`[INFO] Fetching data from ${url} ${isProduction ? 'via proxy' : 'directly'}`);
                 let html = '';
                 
+                let useDirectFetch = !isProduction;
                 if (isProduction) {
                   // Use our internal API proxy when running on Vercel
                   // Fix URL construction by ensuring we have a complete URL with https:// prefix
-                  const baseUrl = process.env.VERCEL_URL 
-                    ? `https://${process.env.VERCEL_URL}` 
-                    : 'http://localhost:3000';
+                  let baseUrl;
+                  
+                  // Check if we're running on the client or server side
+                  if (typeof window !== 'undefined') {
+                    // Client-side: Use the current origin
+                    baseUrl = window.location.origin;
+                    console.log(`[INFO] Using client-side origin for API URL: ${baseUrl}`);
+                  } else {
+                    // Server-side: Use environment variables or fallback
+                    if (process.env.NEXT_PUBLIC_SITE_URL) {
+                      baseUrl = process.env.NEXT_PUBLIC_SITE_URL;
+                    } else if (process.env.VERCEL_URL) {
+                      baseUrl = `https://${process.env.VERCEL_URL}`;
+                    } else {
+                      baseUrl = 'http://localhost:3000';
+                    }
+                    console.log(`[INFO] Using server-side base URL for API: ${baseUrl}`);
+                  }
+                  
+                  // Build the API URL
                   const apiUrl = new URL('/api/reddit', baseUrl);
                   apiUrl.searchParams.set('url', url);
                   
-                  const proxyResponse = await fetch(apiUrl.toString(), {
-                    headers: {
-                      'Accept': 'text/html',
+                  try {
+                    const proxyResponse = await fetch(apiUrl.toString(), {
+                      headers: {
+                        'Accept': 'text/html',
+                      }
+                    });
+                    
+                    if (!proxyResponse.ok) {
+                      const statusCode = proxyResponse.status;
+                      console.error(`[ERROR] Proxy API returned ${statusCode}: ${proxyResponse.statusText}`);
+                      
+                      // If 401 Unauthorized or 404 Not Found, it likely means the proxy API isn't deployed properly
+                      if (statusCode === 401 || statusCode === 404) {
+                        console.warn(`[WARN] Proxy API route appears to be missing or unauthorized. Falling back to direct fetch.`);
+                        throw new Error(`Proxy API not available (${statusCode}). Falling back to direct fetch.`);
+                      }
+                      
+                      throw new Error(`Proxy API returned ${statusCode}: ${proxyResponse.statusText}`);
                     }
-                  });
-                  
-                  if (!proxyResponse.ok) {
-                    throw new Error(`Proxy API returned ${proxyResponse.status}: ${proxyResponse.statusText}`);
+                    
+                    html = await proxyResponse.text();
+                    console.log(`[INFO] Successfully fetched ${url} via proxy API, got ${html.length} bytes`);
+                  } catch (error) {
+                    // Log the proxy error
+                    console.warn(`[WARN] Proxy API fetch failed: ${error instanceof Error ? error.message : String(error)}. Attempting direct fetch as fallback.`);
+                    
+                    // Fall back to direct fetch
+                    useDirectFetch = true;
                   }
-                  
-                  html = await proxyResponse.text();
-                  console.log(`[INFO] Successfully fetched ${url} via proxy API, got ${html.length} bytes`);
-                } else {
+                }
+                
+                // For local development or if proxy failed, try the direct approach
+                if (useDirectFetch) {
                   // For local development, try the direct approach with retries
                   let retries = 0;
                   const maxRetries = 3;
