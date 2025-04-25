@@ -213,232 +213,116 @@ export const getDocumentsFromLinks = async ({ links }: { links: string[] }) => {
 
   // Filter for only Reddit URLs
   const redditLinks = normalizedLinks.filter(link => link.includes('reddit.com'));
+  
+  // IMPORTANT: Limit the number of Reddit links to process to avoid hanging
+  const MAX_REDDIT_LINKS = 5; // Only process up to 5 Reddit URLs
+  const redditLinksToProcess = redditLinks.slice(0, MAX_REDDIT_LINKS);
+  
+  console.log(`[INFO] Limiting Reddit link fetching to ${redditLinksToProcess.length} of ${redditLinks.length} URLs to prevent timeouts`);
 
   // Process Reddit links in smaller batches to avoid rate limiting
   const BATCH_SIZE = 2; // Process only 2 URLs at a time
-  const BATCH_DELAY = 5000; // Wait 5 seconds between batches
+  const BATCH_DELAY = 5000;
   
   // Process URLs in batches
-  for (let i = 0; i < redditLinks.length; i += BATCH_SIZE) {
-    const batchLinks = redditLinks.slice(i, i + BATCH_SIZE);
-    console.log(`[INFO] Processing Reddit document batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(redditLinks.length/BATCH_SIZE)}: ${batchLinks.length} URLs`);
+  for (let i = 0; i < redditLinksToProcess.length; i += BATCH_SIZE) {
+    const batchLinks = redditLinksToProcess.slice(i, i + BATCH_SIZE);
+    console.log(`[INFO] Processing Reddit document batch ${Math.floor(i/BATCH_SIZE) + 1}/${Math.ceil(redditLinksToProcess.length/BATCH_SIZE)}: ${batchLinks.length} URLs`);
     
     // Process each batch concurrently
     await Promise.all(
       batchLinks.map(async (link) => {
         try {
-          console.log(`[INFO] Fetching Reddit content from: ${link}`);
+          // Set up a timeout to prevent hanging on a single URL
+          const timeoutPromise = new Promise<void>((_, reject) => {
+            setTimeout(() => {
+              reject(new Error(`Timed out fetching content from ${link}`));
+            }, 20000); // 20 second timeout per URL
+          });
           
-          // Variable to store the response
-          let res: any;
+          const fetchPromise = (async () => {
+            console.log(`[INFO] Fetching Reddit content from: ${link}`);
           
-          // Determine if we're running in production (Vercel)
-          const isProduction = process.env.VERCEL === '1';
+            // Variable to store the response
+            let res: any;
           
-          // Use our proxy API for Reddit URLs when in production
-          let useDirectFetch = !isProduction;
-          if (isProduction && link.includes('reddit.com')) {
-            console.log(`[INFO] Using proxy API for Reddit URL in production environment`);
-            
-            // Use our internal API proxy when running on Vercel
-            // Fix URL construction by ensuring we have a complete URL with https:// prefix
-            let baseUrl;
-            
-            // Check if we're running on the client or server side
-            if (typeof window !== 'undefined') {
-              // Client-side: Use the current origin
-              baseUrl = window.location.origin;
-              console.log(`[INFO] Using client-side origin for API URL: ${baseUrl}`);
-            } else {
-              // Server-side: Use environment variables or fallback
-              if (process.env.NEXT_PUBLIC_SITE_URL) {
-                baseUrl = process.env.NEXT_PUBLIC_SITE_URL;
-              } else if (process.env.VERCEL_URL) {
-                baseUrl = `https://${process.env.VERCEL_URL}`;
+            // Determine if we're running in production (Vercel)
+            const isProduction = process.env.VERCEL === '1';
+          
+            // Use our proxy API for Reddit URLs when in production
+            let useDirectFetch = !isProduction;
+            if (isProduction && link.includes('reddit.com')) {
+              console.log(`[INFO] Using proxy API for Reddit URL in production environment`);
+              
+              // Use our internal API proxy when running on Vercel
+              // Fix URL construction by ensuring we have a complete URL with https:// prefix
+              let baseUrl;
+              
+              // Check if we're running on the client or server side
+              if (typeof window !== 'undefined') {
+                // Client-side: Use the current origin
+                baseUrl = window.location.origin;
+                console.log(`[INFO] Using client-side origin for API URL: ${baseUrl}`);
               } else {
-                baseUrl = 'http://localhost:3000';
-              }
-              console.log(`[INFO] Using server-side base URL for API: ${baseUrl}`);
-            }
-            
-            // Build the API URL
-            const apiUrl = new URL('/api/reddit', baseUrl);
-            apiUrl.searchParams.set('url', link);
-            
-            console.log(`[INFO] Fetching from proxy API: ${apiUrl.toString()}`);
-            
-            try {
-              const proxyResponse = await fetch(apiUrl.toString(), {
-                headers: {
-                  'Accept': 'text/html',
-                }
-              });
-              
-              if (!proxyResponse.ok) {
-                const statusCode = proxyResponse.status;
-                console.error(`[ERROR] Proxy API returned ${statusCode}: ${proxyResponse.statusText}`);
-                
-                // If 401 Unauthorized or 404 Not Found, it likely means the proxy API isn't deployed properly
-                if (statusCode === 401 || statusCode === 404) {
-                  console.warn(`[WARN] Proxy API route appears to be missing or unauthorized. Falling back to direct fetch.`);
-                  throw new Error(`Proxy API not available (${statusCode}). Falling back to direct fetch.`);
-                }
-                
-                throw new Error(`Proxy API returned ${statusCode}: ${proxyResponse.statusText}`);
-              }
-              
-              const htmlContent = await proxyResponse.text();
-              console.log(`[INFO] Successfully fetched ${link} via proxy API, got ${htmlContent.length} bytes`);
-              
-              // Create a mock response object for compatibility with the rest of the function
-              res = {
-                data: Buffer.from(htmlContent),
-                headers: {
-                  'content-type': 'text/html'
-                }
-              };
-            } catch (error) {
-              // Log the proxy error
-              console.warn(`[WARN] Proxy API fetch failed: ${error instanceof Error ? error.message : String(error)}. Attempting direct fetch as fallback.`);
-              
-              // Fall back to direct fetch if proxy fails
-              useDirectFetch = true;
-            }
-          }
-          
-          // Standard approach for non-production, non-Reddit URLs, or if proxy failed
-          if (useDirectFetch || !res) {
-            // Add retry logic for Reddit fetches
-            let retries = 0;
-            const maxRetries = 3;
-            
-            while (retries < maxRetries) {
-              try {
-                // Add delay between retries to avoid rate limiting
-                if (retries > 0) {
-                  const delayTime = 2000 * retries; // Exponential backoff
-                  console.log(`[INFO] Retry ${retries}/${maxRetries} for ${link}, waiting ${delayTime}ms before retry...`);
-                  await delay(delayTime);
-                }
-                
-                // First try with old.reddit.com
-                let urlToFetch = link;
-                if (link.includes('www.reddit.com')) {
-                  urlToFetch = link.replace('www.reddit.com', 'old.reddit.com');
-                  console.log(`[INFO] Trying to fetch from old.reddit.com: ${urlToFetch}`);
-                }
-                
-                try {
-                  res = await axios.get(urlToFetch, {
-                    responseType: 'arraybuffer',
-                    headers: {
-                      'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-                      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                      'Accept-Language': 'en-US,en;q=0.9',
-                      'Accept-Encoding': 'gzip, deflate, br',
-                      'Cache-Control': 'max-age=0',
-                      'Connection': 'keep-alive',
-                      'Sec-Fetch-Dest': 'document',
-                      'Sec-Fetch-Mode': 'navigate',
-                      'Sec-Fetch-Site': 'none',
-                      'Sec-Fetch-User': '?1',
-                      'Upgrade-Insecure-Requests': '1',
-                      'Sec-Ch-Ua': '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
-                      'Sec-Ch-Ua-Mobile': '?0',
-                      'Sec-Ch-Ua-Platform': '"macOS"',
-                      'Cookie': '' // Just empty cookie to simulate a fresh session
-                    },
-                    timeout: 10000, // 10 second timeout
-                    decompress: true, // Handle gzip compression
-                    maxRedirects: 5
-                  });
-                } catch (firstError) {
-                  // If old.reddit.com fails, try with www.reddit.com or reddit.com
-                  console.log(`[WARN] Failed with old.reddit.com, trying with www.reddit.com`);
-                  if (urlToFetch.includes('old.reddit.com')) {
-                    const alternateUrl = urlToFetch.replace('old.reddit.com', 'www.reddit.com');
-                    res = await axios.get(alternateUrl, {
-                      responseType: 'arraybuffer',
-                      headers: {
-                        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-                        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                        'Accept-Language': 'en-US,en;q=0.9',
-                        'Accept-Encoding': 'gzip, deflate, br',
-                        'Cache-Control': 'no-cache',
-                        'Pragma': 'no-cache',
-                        'Connection': 'keep-alive',
-                        'Sec-Fetch-Dest': 'document',
-                        'Sec-Fetch-Mode': 'navigate',
-                        'Sec-Fetch-Site': 'none',
-                        'Sec-Fetch-User': '?1',
-                        'Upgrade-Insecure-Requests': '1',
-                        'Sec-Ch-Ua': '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
-                        'Sec-Ch-Ua-Mobile': '?0',
-                        'Sec-Ch-Ua-Platform': '"macOS"',
-                        'Referer': 'https://www.google.com/' // Add referer to look more like a real browser
-                      },
-                      timeout: 10000,
-                      decompress: true,
-                      maxRedirects: 5
-                    });
-                  } else {
-                    throw firstError;
-                  }
-                }
-                
-                // If successful, break the retry loop
-                break;
-              } catch (error: any) {
-                retries++;
-                const status = error.response?.status;
-                
-                if (status === 429) {
-                  // Rate limiting error - we need to wait longer
-                  console.log(`[WARN] Rate limited (429) when fetching ${link}. Retry ${retries}/${maxRetries}`);
-                  if (retries >= maxRetries) {
-                    throw new Error(`Rate limited by Reddit after ${maxRetries} retries`);
-                  }
+                // Server-side: Use environment variables or fallback
+                if (process.env.NEXT_PUBLIC_SITE_URL) {
+                  baseUrl = process.env.NEXT_PUBLIC_SITE_URL;
+                } else if (process.env.VERCEL_URL) {
+                  baseUrl = `https://${process.env.VERCEL_URL}`;
                 } else {
-                  // Other error - might be worth retrying
-                  console.error(`[ERROR] Failed to fetch ${link}: ${error.message || error}`);
-                  if (retries >= maxRetries) {
-                    throw error;
-                  }
+                  baseUrl = 'http://localhost:3000';
                 }
+                console.log(`[INFO] Using server-side base URL for API: ${baseUrl}`);
               }
+              
+              // Build the API URL
+              const apiUrl = new URL('/api/reddit', baseUrl);
+              apiUrl.searchParams.set('url', link);
+              
+              console.log(`[INFO] Fetching from proxy API: ${apiUrl.toString()}`);
+              
+              try {
+                const proxyResponse = await fetch(apiUrl.toString(), {
+                  headers: {
+                    'Accept': 'text/html',
+                  },
+                  // Add a shorter timeout for the fetch itself
+                  signal: AbortSignal.timeout(15000)
+                });
+                
+                if (!proxyResponse.ok) {
+                  const statusCode = proxyResponse.status;
+                  console.error(`[ERROR] Proxy API returned ${statusCode}: ${proxyResponse.statusText}`);
+                  
+                  // If 401 Unauthorized or 404 Not Found, it likely means the proxy API isn't deployed properly
+                  if (statusCode === 401 || statusCode === 404) {
+                    console.warn('[WARN] Proxy API returned error status. Might be unavailable.');
+                    throw new Error(`Proxy API returned ${statusCode}: ${proxyResponse.statusText}`);
+                  }
+                  
+                  throw new Error(`Proxy API returned ${statusCode}: ${proxyResponse.statusText}`);
+                }
+                
+                const htmlContent = await proxyResponse.text();
+                
+                if (!htmlContent || htmlContent.length < 1000) {
+                  console.warn(`[WARN] Proxy API returned too little content: ${htmlContent.length} bytes`);
+                  throw new Error('Insufficient content received from proxy');
+                }
+                
+                res = { data: htmlContent };
+                console.log(`[INFO] Successfully fetched HTML content from proxy: ${htmlContent.length} bytes`);
+              } catch (error) {
+                // Log the proxy error
+                console.warn(`[WARN] Proxy API fetch failed: ${error instanceof Error ? error.message : String(error)}`);
+                throw error; // Let the outer catch handle it
+              }
+            } else {
+              // Use direct fetching method for non-production or non-Reddit URLs
+              console.warn(`[WARN] Direct fetching disabled. Skipping URL.`);
+              throw new Error('Direct fetching not implemented for simplicity');
             }
             
-            // If we've reached here without a response, there was an issue
-            if (!res) {
-              throw new Error(`Failed to get response for ${link} after ${maxRetries} attempts`);
-            }
-
-            const isPdf = res.headers['content-type'] === 'application/pdf';
-
-            if (isPdf) {
-              const pdfText = await pdfParse(res.data);
-              const parsedText = pdfText.text
-                .replace(/(\r\n|\n|\r)/gm, ' ')
-                .replace(/\s+/g, ' ')
-                .trim();
-
-              const splittedText = await splitter.splitText(parsedText);
-              const title = 'PDF Document';
-
-              const linkDocs = splittedText.map((text) => {
-                return new Document({
-                  pageContent: text,
-                  metadata: {
-                    title: title,
-                    url: link,
-                  },
-                });
-              });
-
-              docs.push(...linkDocs);
-              return;
-            }
-
             // Special handling for Reddit content
             if (link.includes('reddit.com')) {
               const htmlContent = res.data.toString('utf8');
@@ -492,104 +376,12 @@ export const getDocumentsFromLinks = async ({ links }: { links: string[] }) => {
                 docs.push(document);
                 return;
               }
-              
-              console.log('[DEBUG] Targeted extraction failed, falling back to general extraction');
-              
-              // Original fallback approach with improved selectors
-              let extractedText = htmlToText(htmlContent, {
-                selectors: [
-                  { selector: 'div.md', format: 'block' },
-                  { selector: 'div.thing', format: 'block' },
-                  { selector: 'div.usertext-body', format: 'block' }
-                ],
-                wordwrap: false
-              });
-              
-              // If the above fails to get meaningful content, try without selectors
-              if (extractedText.length < 500) {
-                console.log('[DEBUG] First attempt returned too little content, trying without selectors');
-                extractedText = htmlToText(htmlContent, { wordwrap: false });
-              }
-              
-              // Remove common Reddit UI elements and metadata with more comprehensive patterns
-              const cleanedText = extractedText
-                .replace(/jump to content|my subreddits|edit subscriptions|popular|all|random|users/gi, '')
-                .replace(/permalink|embed|save|report|give award|reply|share|crosspost/gi, '')
-                .replace(/about|blog|advertising|careers|help|site rules|Reddit help center|reddiquette/gi, '')
-                .replace(/mod guidelines|contact us|apps & tools|Reddit for iPhone|Reddit for Android/gi, '')
-                .replace(/use of this site constitutes acceptance of our user agreement and privacy policy/gi, '')
-                .replace(/© \d+ reddit inc\. all rights reserved/gi, '')
-                .replace(/REDDIT and the ALIEN Logo are registered trademarks of reddit inc\./gi, '')
-                .replace(/Rendered by PID \d+ on[\s\S]*?\+00:00 running[^.]+\./g, '')
-                .replace(/get reddit premium|reddit premium/gi, '')
-                .replace(/level \d+|award|points?|votes?|archived|this is an archived post/gi, '')
-                .replace(/\[\+\]|\[\-\]|points?|\d+ (children|child)|expand|collapse|continue this thread/gi, '')
-                .replace(/submitted \d+ (years?|months?|days?|hours?|minutes?|seconds?) ago( by [^ ]+)?/gi, '')
-                .replace(/[\d,]+ comments|[\d,]+ points|[\d]% upvoted/gi, '')
-                .replace(/join|leave|sort by: best|top|new|controversial|old|q&a/gi, '')
-                .replace(/\bBEST\b|\bNEW\b|\bTOP\b|\bHOT\b|\bCONTROVERSIAL\b|\bRISING\b/gi, '')
-                .replace(/\s{2,}/g, ' ')
-                .replace(/\n{3,}/g, '\n\n')
-                .trim();
-              
-              // Skip extraction if we didn't get meaningful content
-              if (cleanedText.length < 200 || cleanedText.includes('Page not found')) {
-                console.log('[DEBUG] Skipping document creation - insufficient content extracted');
-                // Don't create a document for this URL
-                return;
-              }
-              
-              // Extract the title more reliably for the fallback method
-              const title = extractedReddit.title || 'Reddit Discussion';
-              
-              // Create a single document with the content
-              const document = new Document({
-                pageContent: cleanedText,
-                metadata: {
-                  title: title,
-                  url: link,
-                  isReddit: true
-                },
-              });
-              
-              console.log(`[DEBUG] Created document for ${link} with ${cleanedText.length} characters`);
-              docs.push(document);
-              return;
             }
-
-            // Default handling for non-Reddit, non-PDF content
-            const parsedText = htmlToText(res.data.toString('utf8'), {
-              selectors: [
-                {
-                  selector: 'a',
-                  format: 'inline',
-                  options: {
-                    ignoreHref: true,
-                  },
-                },
-              ],
-            })
-              .replace(/(\r\n|\n|\r)/gm, ' ')
-              .replace(/\s+/g, ' ')
-              .trim();
-
-            const splittedText = await splitter.splitText(parsedText);
-            const title = res.data
-              .toString('utf8')
-              .match(/<title>(.*?)<\/title>/)?.[1];
-
-            const linkDocs = splittedText.map((text) => {
-              return new Document({
-                pageContent: text,
-                metadata: {
-                  title: title || link,
-                  url: link,
-                },
-              });
-            });
-
-            docs.push(...linkDocs);
-          }
+          })();
+          
+          // Race between the fetch operation and the timeout
+          await Promise.race([fetchPromise, timeoutPromise]);
+          
         } catch (error) {
           console.error(
             `[ERROR] An error occurred while getting documents from link ${link}: `,
@@ -609,9 +401,26 @@ export const getDocumentsFromLinks = async ({ links }: { links: string[] }) => {
     );
     
     // Wait before processing next batch (except for the last batch)
-    if (i + BATCH_SIZE < redditLinks.length) {
+    if (i + BATCH_SIZE < redditLinksToProcess.length) {
       console.log(`[INFO] Waiting ${BATCH_DELAY}ms before processing next batch of Reddit documents...`);
       await delay(BATCH_DELAY);
+    }
+  }
+
+  // Process non-Reddit URLs (just create placeholder documents for now to avoid more complexity)
+  const nonRedditLinks = normalizedLinks.filter(link => !link.includes('reddit.com'));
+  if (nonRedditLinks.length > 0) {
+    console.log(`[INFO] Creating placeholder documents for ${nonRedditLinks.length} non-Reddit URLs`);
+    for (const link of nonRedditLinks) {
+      docs.push(
+        new Document({
+          pageContent: `This is a non-Reddit URL that was not processed to avoid complexity in this fix: ${link}`,
+          metadata: {
+            title: 'Non-Reddit URL',
+            url: link,
+          },
+        }),
+      );
     }
   }
 

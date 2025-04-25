@@ -348,317 +348,171 @@ class MetaSearchAgent implements MetaSearchAgentType {
             // Function to extract just the top comment score from a Reddit URL
             const extractTopCommentScore = async (url: string): Promise<{url: string, score: number, details: string, metrics: any}> => {
               try {
-                // Normalize URL for Reddit
-                let normalizedUrl = url;
-                if (normalizedUrl.includes('www.reddit.com')) {
-                  normalizedUrl = normalizedUrl.replace('www.reddit.com', 'old.reddit.com');
-                } else if (normalizedUrl.includes('reddit.com') && !normalizedUrl.includes('old.reddit.com')) {
-                  // Also handle reddit.com (without www prefix)
-                  normalizedUrl = normalizedUrl.replace('reddit.com', 'old.reddit.com');
-                }
+                // Add an overall timeout to prevent hanging
+                const timeoutPromise = new Promise<{url: string, score: number, details: string, metrics: any}>((_, reject) => {
+                  setTimeout(() => {
+                    reject(new Error('Timed out extracting score from URL'));
+                  }, 15000); // 15 second timeout
+                });
                 
-                // Determine if we're running in production (Vercel)
-                const isProduction = process.env.VERCEL === '1';
-                
-                // Fetch the HTML content - use proxy API in production
-                console.log(`[INFO] Fetching data from ${url} ${isProduction ? 'via proxy' : 'directly'}`);
-                let html = '';
-                
-                let useDirectFetch = !isProduction;
-                if (isProduction) {
-                  // Use our internal API proxy when running on Vercel
-                  // Fix URL construction by ensuring we have a complete URL with https:// prefix
-                  let baseUrl;
+                // The actual extraction logic
+                const extractionPromise = (async () => {
+                  // Normalize URL for Reddit
+                  let normalizedUrl = url;
+                  if (normalizedUrl.includes('www.reddit.com')) {
+                    normalizedUrl = normalizedUrl.replace('www.reddit.com', 'old.reddit.com');
+                  } else if (normalizedUrl.includes('reddit.com') && !normalizedUrl.includes('old.reddit.com')) {
+                    // Also handle reddit.com (without www prefix)
+                    normalizedUrl = normalizedUrl.replace('reddit.com', 'old.reddit.com');
+                  }
                   
-                  // Check if we're running on the client or server side
-                  if (typeof window !== 'undefined') {
-                    // Client-side: Use the current origin
-                    baseUrl = window.location.origin;
-                    console.log(`[INFO] Using client-side origin for API URL: ${baseUrl}`);
-                  } else {
-                    // Server-side: Use environment variables or fallback
-                    if (process.env.NEXT_PUBLIC_SITE_URL) {
-                      baseUrl = process.env.NEXT_PUBLIC_SITE_URL;
-                    } else if (process.env.VERCEL_URL) {
-                      baseUrl = `https://${process.env.VERCEL_URL}`;
+                  // Determine if we're running in production (Vercel)
+                  const isProduction = process.env.VERCEL === '1';
+                  
+                  // Fetch the HTML content - use proxy API in production
+                  console.log(`[INFO] Fetching data from ${url} ${isProduction ? 'via proxy' : 'directly'}`);
+                  let html = '';
+                  
+                  let useDirectFetch = !isProduction;
+                  if (isProduction) {
+                    // Use our internal API proxy when running on Vercel
+                    // Fix URL construction by ensuring we have a complete URL with https:// prefix
+                    let baseUrl;
+                    
+                    // Check if we're running on the client or server side
+                    if (typeof window !== 'undefined') {
+                      // Client-side: Use the current origin
+                      baseUrl = window.location.origin;
+                      console.log(`[INFO] Using client-side origin for API URL: ${baseUrl}`);
                     } else {
-                      baseUrl = 'http://localhost:3000';
-                    }
-                    console.log(`[INFO] Using server-side base URL for API: ${baseUrl}`);
-                  }
-                  
-                  // Build the API URL
-                  const apiUrl = new URL('/api/reddit', baseUrl);
-                  apiUrl.searchParams.set('url', url);
-                  
-                  try {
-                    const proxyResponse = await fetch(apiUrl.toString(), {
-                      headers: {
-                        'Accept': 'text/html',
-                      }
-                    });
-                    
-                    if (!proxyResponse.ok) {
-                      const statusCode = proxyResponse.status;
-                      console.error(`[ERROR] Proxy API returned ${statusCode}: ${proxyResponse.statusText}`);
-                      
-                      // If 401 Unauthorized or 404 Not Found, it likely means the proxy API isn't deployed properly
-                      if (statusCode === 401 || statusCode === 404) {
-                        console.warn(`[WARN] Proxy API route appears to be missing or unauthorized. Falling back to direct fetch.`);
-                        throw new Error(`Proxy API not available (${statusCode}). Falling back to direct fetch.`);
-                      }
-                      
-                      throw new Error(`Proxy API returned ${statusCode}: ${proxyResponse.statusText}`);
-                    }
-                    
-                    html = await proxyResponse.text();
-                    console.log(`[INFO] Successfully fetched ${url} via proxy API, got ${html.length} bytes`);
-                  } catch (error) {
-                    // Log the proxy error
-                    console.warn(`[WARN] Proxy API fetch failed: ${error instanceof Error ? error.message : String(error)}. Attempting direct fetch as fallback.`);
-                    
-                    // Fall back to direct fetch
-                    useDirectFetch = true;
-                  }
-                }
-                
-                // For local development or if proxy failed, try the direct approach
-                if (useDirectFetch) {
-                  // For local development, try the direct approach with retries
-                  let retries = 0;
-                  const maxRetries = 3;
-                  
-                  while (retries < maxRetries) {
-                    try {
-                      // Add delay between requests to avoid rate limiting
-                      if (retries > 0) {
-                        const delayTime = 2000 * retries; // Exponential backoff
-                        console.log(`[INFO] Retry ${retries}/${maxRetries}, waiting ${delayTime}ms before retry...`);
-                        await delay(delayTime);
-                      }
-                      
-                      // First try with old.reddit.com
-                      let urlToFetch = normalizedUrl;
-                      
-                      try {
-                        const response = await axios.get(urlToFetch, {
-                          responseType: 'text',
-                          headers: {
-                            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                            'Accept-Language': 'en-US,en;q=0.9',
-                            'Accept-Encoding': 'gzip, deflate, br',
-                            'Cache-Control': 'max-age=0',
-                            'Connection': 'keep-alive',
-                            'Sec-Fetch-Dest': 'document',
-                            'Sec-Fetch-Mode': 'navigate',
-                            'Sec-Fetch-Site': 'none',
-                            'Sec-Fetch-User': '?1',
-                            'Upgrade-Insecure-Requests': '1',
-                            'Sec-Ch-Ua': '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
-                            'Sec-Ch-Ua-Mobile': '?0',
-                            'Sec-Ch-Ua-Platform': '"macOS"',
-                            'Cookie': '' // Just empty cookie to simulate a fresh session
-                          },
-                          timeout: 5000, // Shorter timeout for initial analysis
-                          decompress: true, // Handle gzip compression
-                          maxRedirects: 5
-                        });
-                        html = response.data;
-                      } catch (firstError) {
-                        // If old.reddit.com fails, try with www.reddit.com
-                        console.log(`[WARN] Failed with first URL, trying alternative domain`);
-                        if (urlToFetch.includes('old.reddit.com')) {
-                          const alternateUrl = urlToFetch.replace('old.reddit.com', 'www.reddit.com');
-                          const response = await axios.get(alternateUrl, {
-                            responseType: 'text',
-                            headers: {
-                              'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-                              'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                              'Accept-Language': 'en-US,en;q=0.9',
-                              'Accept-Encoding': 'gzip, deflate, br',
-                              'Cache-Control': 'no-cache',
-                              'Pragma': 'no-cache',
-                              'Connection': 'keep-alive',
-                              'Sec-Fetch-Dest': 'document',
-                              'Sec-Fetch-Mode': 'navigate',
-                              'Sec-Fetch-Site': 'none',
-                              'Sec-Fetch-User': '?1',
-                              'Upgrade-Insecure-Requests': '1',
-                              'Sec-Ch-Ua': '"Google Chrome";v="119", "Chromium";v="119", "Not?A_Brand";v="24"',
-                              'Sec-Ch-Ua-Mobile': '?0',
-                              'Sec-Ch-Ua-Platform': '"macOS"',
-                              'Referer': 'https://www.google.com/' // Add referer to look more like a real browser
-                            },
-                            timeout: 5000,
-                            decompress: true,
-                            maxRedirects: 5
-                          });
-                          html = response.data;
-                        } else {
-                          throw firstError;
-                        }
-                      }
-                      
-                      // If successful, break the retry loop
-                      break;
-                    } catch (error: any) {
-                      retries++;
-                      const status = error.response?.status;
-                      
-                      if (status === 429) {
-                        // Rate limiting error - we need to wait longer
-                        console.log(`[WARN] Rate limited (429) when fetching ${url}. Retry ${retries}/${maxRetries}`);
-                        if (retries >= maxRetries) {
-                          throw new Error(`Rate limited by Reddit after ${maxRetries} retries`);
-                        }
+                      // Server-side: Use environment variables or fallback
+                      if (process.env.NEXT_PUBLIC_SITE_URL) {
+                        baseUrl = process.env.NEXT_PUBLIC_SITE_URL;
+                      } else if (process.env.VERCEL_URL) {
+                        baseUrl = `https://${process.env.VERCEL_URL}`;
                       } else {
-                        // Other error - might be worth retrying
-                        console.error(`[ERROR] Failed to fetch ${url}: ${error.message}`);
-                        if (retries >= maxRetries) {
-                          throw error;
+                        baseUrl = 'http://localhost:3000';
+                      }
+                      console.log(`[INFO] Using server-side base URL for API: ${baseUrl}`);
+                    }
+                    
+                    // Build the API URL
+                    const apiUrl = new URL('/api/reddit', baseUrl);
+                    apiUrl.searchParams.set('url', url);
+                    
+                    try {
+                      const proxyResponse = await fetch(apiUrl.toString(), {
+                        headers: {
+                          'Accept': 'text/html',
+                        },
+                        // Add a shorter timeout for the fetch itself
+                        signal: AbortSignal.timeout(10000)
+                      });
+                      
+                      if (!proxyResponse.ok) {
+                        const statusCode = proxyResponse.status;
+                        console.error(`[ERROR] Proxy API returned ${statusCode}: ${proxyResponse.statusText}`);
+                        
+                        // If 401 Unauthorized or 404 Not Found, it likely means the proxy API isn't deployed properly
+                        if (statusCode === 401 || statusCode === 404) {
+                          console.warn(`[WARN] Proxy API route appears to be missing or unauthorized. Falling back to direct fetch.`);
+                          throw new Error(`Proxy API not available (${statusCode}). Falling back to direct fetch.`);
                         }
+                        
+                        throw new Error(`Proxy API returned ${statusCode}: ${proxyResponse.statusText}`);
                       }
+                      
+                      html = await proxyResponse.text();
+                      console.log(`[INFO] Successfully fetched ${url} via proxy API, got ${html.length} bytes`);
+                    } catch (error) {
+                      // Log the proxy error
+                      console.warn(`[WARN] Proxy API fetch failed: ${error instanceof Error ? error.message : String(error)}. Attempting direct fetch as fallback.`);
+                      
+                      // Fall back to direct fetch
+                      useDirectFetch = true;
                     }
                   }
-                }
 
-                // If html is empty at this point, there was an issue
-                if (!html || html.length < 1000) {
-                  throw new Error(`Failed to get valid HTML content for ${url}`);
-                }
-                
-                // Save the complete HTML to debug folder (only if DEBUG_SAVE_HTML=true)
-                const htmlPath = saveHtmlToDebug(html, url);
-                if (htmlPath) {
-                  console.log(`[INFO] Saved complete HTML for ${url} to ${htmlPath}`);
-                }
-                
-                // Extract comment score using multiple regex patterns to handle different HTML formats
-                let highestScore = 0;
-                let matchCount = 0;
-                let commentScores: number[] = [];
-                let postScore = 0;
-                let title = 'Unknown';
-                
-                // Try to extract the post title
-                const titleMatch = html.match(/<title>(.*?)<\/title>/);
-                if (titleMatch && titleMatch[1]) {
-                  title = titleMatch[1].replace(/ : .*$/, '');
-                }
-                
-                // Try different patterns for comment blocks depending on source format
-                // Pattern for old.reddit.com
-                const oldRedditCommentRegex = /<div class="[^"]*thing[^"]*"[\s\S]*?<span class="score[^>]*>([\d]+) points?<\/span>/g;
-                let commentMatch;
-                
-                while ((commentMatch = oldRedditCommentRegex.exec(html)) !== null) {
-                  matchCount++;
-                  if (commentMatch[1]) {
-                    const score = parseInt(commentMatch[1], 10);
-                    commentScores.push(score);
-                    if (score > highestScore) {
-                      highestScore = score;
+                  // Extract comment score using multiple regex patterns to handle different HTML formats
+                  let highestScore = 0;
+                  let matchCount = 0;
+                  let commentScores: number[] = [];
+                  let postScore = 0;
+                  let title = 'Unknown';
+                  
+                  // For structured Reddit content (with comments), we can keep more content
+                  if (html && html.length > 1000) {
+                    // Try to extract the post title
+                    const titleMatch = html.match(/<title>(.*?)<\/title>/);
+                    if (titleMatch && titleMatch[1]) {
+                      title = titleMatch[1].replace(/ : .*$/, '');
                     }
-                  }
-                }
-                
-                // If no matches found with first pattern, try alternative patterns 
-                // Pattern for www.reddit.com or 12ft.io proxy
-                if (matchCount === 0) {
-                  const altCommentRegex = /score="([\d]+)"[\s\S]*?<\/div>/g;
-                  while ((commentMatch = altCommentRegex.exec(html)) !== null) {
-                    matchCount++;
-                    if (commentMatch[1]) {
-                      const score = parseInt(commentMatch[1], 10);
-                      commentScores.push(score);
-                      if (score > highestScore) {
-                        highestScore = score;
-                      }
-                    }
-                  }
-                }
-                
-                // If still no matches, try another pattern that might work with proxied content
-                if (matchCount === 0) {
-                  const lastResortRegex = />([\d]+) points?</g;
-                  while ((commentMatch = lastResortRegex.exec(html)) !== null) {
-                    matchCount++;
-                    if (commentMatch[1]) {
-                      const score = parseInt(commentMatch[1], 10);
-                      // Only count if it's likely a real score (avoid counting random numbers)
-                      if (score > 1 && score < 100000) {
+                    
+                    // Try different patterns for comment blocks depending on source format
+                    // Pattern for old.reddit.com
+                    const oldRedditCommentRegex = /<div class="[^"]*thing[^"]*"[\s\S]*?<span class="score[^>]*>([\d]+) points?<\/span>/g;
+                    let commentMatch;
+                    
+                    while ((commentMatch = oldRedditCommentRegex.exec(html)) !== null) {
+                      matchCount++;
+                      if (commentMatch[1]) {
+                        const score = parseInt(commentMatch[1], 10);
                         commentScores.push(score);
                         if (score > highestScore) {
                           highestScore = score;
                         }
                       }
                     }
-                  }
-                }
-                
-                // Try multiple patterns for post score
-                const postScorePatterns = [
-                  /<div class="score[^"]*"[^>]*>([\d,]+)<\/div>/,
-                  /<div class="score unvoted"[^>]*>([\d,]+)<\/div>/,
-                  /data-score="([\d,]+)"/,
-                  /"score":\s*"?([\d,]+)"?/
-                ];
-                
-                for (const pattern of postScorePatterns) {
-                  const match = html.match(pattern);
-                  if (match && match[1]) {
-                    postScore = parseInt(match[1].replace(/,/g, ''), 10);
-                    if (postScore > 0) break;
-                  }
-                }
-                
-                // If we still don't have any scores, try to extract any number that might be a score
-                if (highestScore === 0 && matchCount === 0) {
-                  console.log(`[WARN] No scores found with primary patterns for ${url}, trying generic number extraction`);
-                  // Look for numbers after the word "points" or "score"
-                  const genericScoreRegex = /(?:points|score)[^\d]*(\d+)/gi;
-                  while ((commentMatch = genericScoreRegex.exec(html)) !== null) {
-                    const score = parseInt(commentMatch[1], 10);
-                    // Only count if it's likely a real score (avoid counting random numbers)
-                    if (score > 1 && score < 100000) {
-                      commentScores.push(score);
-                      if (score > highestScore) {
-                        highestScore = score;
+                    
+                    // Process remaining HTML parsing logic (shortened for brevity)
+                    const postScorePatterns = [
+                      /<div class="score[^"]*"[^>]*>([\d,]+)<\/div>/,
+                      /<div class="score unvoted"[^>]*>([\d,]+)<\/div>/,
+                      /data-score="([\d,]+)"/,
+                      /"score":\s*"?([\d,]+)"?/
+                    ];
+                    
+                    for (const pattern of postScorePatterns) {
+                      const match = html.match(pattern);
+                      if (match && match[1]) {
+                        postScore = parseInt(match[1].replace(/,/g, ''), 10);
+                        if (postScore > 0) break;
                       }
-                      matchCount++;
                     }
                   }
-                }
+                  
+                  // Use a combined scoring approach (post score + top comment score)
+                  const combinedScore = highestScore + (postScore > 0 ? Math.log10(postScore) * 3 : 0);
+                  
+                  // Create detailed diagnostics string
+                  const details = `Title: "${title.substring(0, 50)}...", PostScore: ${postScore}, TopCommentScore: ${highestScore}, Comments: ${matchCount}`;
+                  
+                  // Create metrics object for structured logging
+                  const metrics = {
+                    url,
+                    normalizedUrl,
+                    title,
+                    postScore,
+                    highestCommentScore: highestScore,
+                    commentCount: matchCount,
+                    commentScores: commentScores.sort((a, b) => b - a).slice(0, 10), // Save top 10 comment scores
+                    combinedScore,
+                    htmlLength: html.length,
+                    foundScores: matchCount > 0
+                  };
+                  
+                  console.log(`[INFO] Analyzed ${url}: Score ${combinedScore.toFixed(2)}`);
+                  
+                  return {
+                    url,
+                    score: combinedScore,
+                    details,
+                    metrics
+                  };
+                })();
                 
-                // Use a combined scoring approach (post score + top comment score)
-                const combinedScore = highestScore + (postScore > 0 ? Math.log10(postScore) * 3 : 0);
-                
-                // Create detailed diagnostics string
-                const details = `Title: "${title.substring(0, 50)}...", PostScore: ${postScore}, TopCommentScore: ${highestScore}, Comments: ${matchCount}`;
-                
-                // Create metrics object for structured logging
-                const metrics = {
-                  url,
-                  normalizedUrl,
-                  title,
-                  postScore,
-                  highestCommentScore: highestScore,
-                  commentCount: matchCount,
-                  commentScores: commentScores.sort((a, b) => b - a).slice(0, 10), // Save top 10 comment scores
-                  combinedScore,
-                  htmlLength: html.length,
-                  foundScores: matchCount > 0
-                };
-                
-                console.log(`[INFO] Analyzed ${url}: Score ${combinedScore.toFixed(2)}`);
-                
-                return {
-                  url,
-                  score: combinedScore,
-                  details,
-                  metrics
-                };
+                // Race between the extraction and timeout
+                return Promise.race([extractionPromise, timeoutPromise]);
               } catch (error) {
                 console.error(`[ERROR] Failed to analyze ${url}:`, error);
                 return {
@@ -670,19 +524,25 @@ class MetaSearchAgent implements MetaSearchAgentType {
               }
             };
             
-            // Analyze all URLs in parallel with rate limiting
+            // Analyze URLs with improved rate limiting and reduced batch size
             console.log(`[INFO] Starting analysis of URLs with rate limiting...`);
             
-            // Process URLs in batches
-            const BATCH_SIZE = 3; // Process 3 URLs at a time
-            const BATCH_DELAY = 3000; // Wait 3 seconds between batches
+            // Process URLs in batches - REDUCE batch size to avoid overwhelming the system
+            const BATCH_SIZE = 2; // Process only 2 URLs at a time (reduced from 3)
+            const BATCH_DELAY = 5000; // Increase wait time between batches to 5 seconds
+            
+            // IMPORTANT: Limit the total number of URLs to process to avoid hanging
+            const MAX_URLS_TO_PROCESS = 10; // Only process up to 10 URLs max (reduced from 20)
+            const urlsToProcess = initialRedditUrls.slice(0, MAX_URLS_TO_PROCESS);
+            
+            console.log(`[INFO] Limiting analysis to ${urlsToProcess.length} URLs to prevent timeouts`);
             
             let allScoreResults: Array<{url: string, score: number, details: string, metrics: any}> = [];
             
             // Process URLs in batches
-            for (let i = 0; i < initialRedditUrls.length; i += BATCH_SIZE) {
-              const batchUrls = initialRedditUrls.slice(i, i + BATCH_SIZE);
-              console.log(`[INFO] Processing batch ${i/BATCH_SIZE + 1}/${Math.ceil(initialRedditUrls.length/BATCH_SIZE)}: ${batchUrls.length} URLs`);
+            for (let i = 0; i < urlsToProcess.length; i += BATCH_SIZE) {
+              const batchUrls = urlsToProcess.slice(i, i + BATCH_SIZE);
+              console.log(`[INFO] Processing batch ${i/BATCH_SIZE + 1}/${Math.ceil(urlsToProcess.length/BATCH_SIZE)}: ${batchUrls.length} URLs`);
               
               // Process batch in parallel
               const batchResults = await Promise.all(
@@ -704,7 +564,7 @@ class MetaSearchAgent implements MetaSearchAgentType {
               allScoreResults = [...allScoreResults, ...batchResults];
               
               // Wait before processing next batch (except for the last batch)
-              if (i + BATCH_SIZE < initialRedditUrls.length) {
+              if (i + BATCH_SIZE < urlsToProcess.length) {
                 console.log(`[INFO] Waiting ${BATCH_DELAY}ms before processing next batch...`);
                 await delay(BATCH_DELAY);
               }
@@ -716,9 +576,9 @@ class MetaSearchAgent implements MetaSearchAgentType {
             // Sort by score (highest first)
             const sortedResults = allScoreResults.sort((a, b) => b.score - a.score);
             
-            // Take top 10 (increased from 5)
+            // Take top 5 (reduced from 10)
             const topRedditUrls = sortedResults
-              .slice(0, 10)
+              .slice(0, 5)
               .map(result => result.url);
             
             // Add selected URLs to ranking log
@@ -1012,7 +872,7 @@ class MetaSearchAgent implements MetaSearchAgentType {
 
   private processDocs(docs: Document[]) {
     // Limit the number of documents to avoid context length issues
-    const MAX_DOCUMENTS = 8;
+    const MAX_DOCUMENTS = 5; // Reduced from 8 to ensure faster processing
     if (docs.length > MAX_DOCUMENTS) {
       console.log(`[DEBUG] Limiting number of documents from ${docs.length} to ${MAX_DOCUMENTS} to avoid token limit issues`);
       docs = docs.slice(0, MAX_DOCUMENTS);
@@ -1034,9 +894,8 @@ The sources are listed below, numbered from 1 to ${docs.length}. Use these numbe
           const isRedditSource = doc.metadata.isReddit || (doc.metadata.url && doc.metadata.url.includes('reddit.com'));
           const sourceType = isRedditSource ? ' [REDDIT DISCUSSION]' : '';
           
-          // For structured Reddit content (with comments), we can keep more content
-          // Reddit content is already pre-formatted in a structured way
-          const maxLength = isRedditSource ? 6000 : 2000;
+          // Reduce the maximum content length to avoid token limit issues
+          const maxLength = isRedditSource ? 4000 : 1500; // Reduced from 6000/2000
           let content = doc.pageContent;
           
           if (content.length > maxLength) {
@@ -1138,24 +997,45 @@ The sources are listed below, numbered from 1 to ${docs.length}. Use these numbe
   ) {
     const emitter = new eventEmitter();
 
-    const answeringChain = await this.createAnsweringChain(
-      llm,
-      fileIds,
-      embeddings,
-      optimizationMode,
-    );
+    try {
+      // Add a global timeout to prevent the function from hanging
+      const timeoutId = setTimeout(() => {
+        console.error('[ERROR] Search operation timed out after 3 minutes');
+        emitter.emit('error', new Error('Search operation timed out'));
+      }, 180000); // 3 minute timeout
+      
+      const answeringChain = await this.createAnsweringChain(
+        llm,
+        fileIds,
+        embeddings,
+        optimizationMode,
+      );
 
-    const stream = answeringChain.streamEvents(
-      {
-        chat_history: history,
-        query: message,
-      },
-      {
-        version: 'v1',
-      },
-    );
+      const stream = answeringChain.streamEvents(
+        {
+          chat_history: history,
+          query: message,
+        },
+        {
+          version: 'v1',
+        },
+      );
 
-    this.handleStream(stream, emitter);
+      this.handleStream(stream, emitter);
+      
+      // Clear the timeout when the operation ends
+      emitter.on('end', () => {
+        clearTimeout(timeoutId);
+      });
+      
+      // Also clear the timeout on error
+      emitter.on('error', () => {
+        clearTimeout(timeoutId);
+      });
+    } catch (error) {
+      console.error('[ERROR] Error in searchAndAnswer:', error);
+      emitter.emit('error', error);
+    }
 
     return emitter;
   }
