@@ -23,6 +23,17 @@ const MessageSources = ({ sources }: { sources: Document[] }) => {
     document.body.classList.add('overflow-hidden-scrollable');
   };
 
+  // Function to extract site name from URL
+  const getSiteName = (url: string) => {
+    // Special case for Reddit URLs
+    if (url.includes('reddit.com')) {
+      return 'Reddit';
+    }
+    
+    // Default extraction for other URLs
+    return url.replace(/.+\/\/|www.|\..+/g, '');
+  };
+
   return (
     <div className="grid grid-cols-2 lg:grid-cols-4 gap-2">
       {sources.slice(0, 3).map((source, i) => (
@@ -51,7 +62,7 @@ const MessageSources = ({ sources }: { sources: Document[] }) => {
                 />
               )}
               <p className="text-xs text-black/50 dark:text-white/50 overflow-hidden whitespace-nowrap text-ellipsis">
-                {source.metadata.url.replace(/.+\/\/|www.|\..+/g, '')}
+                {getSiteName(source.metadata.url)}
               </p>
             </div>
             <div className="flex flex-row items-center space-x-1 text-black/50 dark:text-white/50 text-xs">
@@ -136,10 +147,7 @@ const MessageSources = ({ sources }: { sources: Document[] }) => {
                               />
                             )}
                             <p className="text-xs text-black/50 dark:text-white/50 overflow-hidden whitespace-nowrap text-ellipsis">
-                              {source.metadata.url.replace(
-                                /.+\/\/|www.|\..+/g,
-                                '',
-                              )}
+                              {getSiteName(source.metadata.url)}
                             </p>
                           </div>
                           <div className="flex flex-row items-center space-x-1 text-black/50 dark:text-white/50 text-xs">
